@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { PatentReviewTab } from '@/components/admin/PatentReviewTab'
+import { ContentReviewTab } from '@/components/admin/ContentReviewTab'
 import type { ScoredPatent } from '@/types'
 import type { PipelineStats } from '@/app/api/admin/stats/route'
 
@@ -142,7 +143,7 @@ export default function AdminPage() {
             )}
 
             {tab === 'content' && (
-              <Placeholder title="Content Review" stage="Stage 5" />
+              <ContentReviewTab onAction={fetchData} />
             )}
 
             {tab === 'published' && (
