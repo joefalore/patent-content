@@ -39,6 +39,7 @@ export interface PatentScore {
   visual_appeal: number | null
   abstract: string | null
   plain_english: string | null
+  reasoning: string | null
   has_diagrams: number
   scored_at: string
   approved_for_content: number

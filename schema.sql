@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS patent_scores (
   -- Shown in admin panel alongside score — invaluable for threshold calibration
   plain_english TEXT,
 
+  -- Haiku reasoning (shown in admin to explain the score)
+  reasoning TEXT,
+
   -- Metadata
   has_diagrams BOOLEAN DEFAULT 0,
   scored_at DATETIME DEFAULT CURRENT_TIMESTAMP,

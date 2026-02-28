@@ -1,10 +1,15 @@
 /**
- * Patent Scorer Worker
- * Runs on Cloudflare Cron Trigger every 5 minutes.
- * Fetches 50 unscored expired patents, scores them with Claude Haiku,
- * saves 8+ scores to patent_scores table.
+ * Patent Scorer Worker — InventionGenie
  *
- * Built in Stage 2.
+ * Runs on Cloudflare Cron Trigger every 5 minutes.
+ * Each run processes BATCH_SIZE unscored expired utility patents:
+ *   1. Fetch abstracts from PatentsView (parallel batches, 45 req/min limit)
+ *   2. Check Google Patents for diagrams (sequential, 1-3s random delay, circuit breaker)
+ *   3. Score with Claude Haiku (structured JSON with plain-English translation)
+ *   4. Save ALL processed patents to patent_scores — even rejections (score=0)
+ *      so they are excluded from future batches and never re-processed
+ *
+ * The fetch handler accepts POST from the admin "Run Now" button.
  */
 
 export interface Env {
@@ -12,27 +17,447 @@ export interface Env {
   R2_BUCKET: R2Bucket
   ANTHROPIC_API_KEY: string
   PATENTSVIEW_API_KEY: string
+  WORKER_AUTH_SECRET: string
   DOMAIN: string
 }
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const HAIKU_MODEL = 'claude-haiku-4-5-20251001'
+const BATCH_SIZE = 30
+const PATENTSVIEW_RATE_LIMIT = 45 // max requests per 60-second window
+const USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+const CPC_DESCRIPTIONS: Record<string, string> = {
+  A: 'Human Necessities (food, clothing, personal care, health, amusement)',
+  B: 'Performing Operations, Transporting (separating, mixing, shaping, printing, vehicles)',
+  C: 'Chemistry, Metallurgy (materials, compounds, processes)',
+  D: 'Textiles, Paper (fiber treatment, weaving, apparel)',
+  E: 'Fixed Constructions (buildings, civil engineering, sanitary)',
+  F: 'Mechanical Engineering, Lighting, Heating (engines, weapons, pumps)',
+  G: 'Physics (instruments, nuclear, computing, optics)',
+  H: 'Electricity, Electronics (circuits, communications, semiconductors)',
+  Y: 'Emerging Cross-Sector Technologies',
+}
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface PatentRow {
+  patent_number: string
+  title: string
+  assignee_name: string | null
+  cpc_section: string | null
+  calculated_expiration_date: string | null
+  filing_date: string | null
+  grant_date: string | null
+}
+
+interface ScoringResult {
+  plain_english: string
+  consumer_relevance: number
+  relatability: number
+  explainability: number
+  visual_appeal: number
+  score: number
+  reasoning: string
+}
+
+interface BatchStats {
+  fetched: number
+  no_abstract: number
+  no_diagrams: number
+  google_blocked: boolean
+  scored: number
+  approved: number // score >= 8
+  errors: number
+}
+
+// ─── Utilities ────────────────────────────────────────────────────────────────
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function randomDelay(minMs: number, maxMs: number): Promise<void> {
+  return sleep(minMs + Math.random() * (maxMs - minMs))
+}
+
+/**
+ * Fill {{placeholder}} template variables.
+ * Used to inject patent data into the scoring prompt stored in D1.
+ */
+function fillTemplate(template: string, vars: Record<string, string>): string {
+  return template.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? '')
+}
+
+// ─── PatentsView Rate Limiter ─────────────────────────────────────────────────
+//
+// Tracks timestamps of recent API calls within a 60-second sliding window.
+// Blocks when the window is full and waits until space opens up.
+// This instance is per-Worker-invocation (no cross-invocation shared state).
+
+const patentsViewLimiter = {
+  queue: [] as number[],
+
+  async throttle(): Promise<void> {
+    const now = Date.now()
+    // Drop timestamps older than 60 seconds
+    this.queue = this.queue.filter((t) => now - t < 60_000)
+
+    if (this.queue.length >= PATENTSVIEW_RATE_LIMIT) {
+      // Wait until the oldest call falls out of the window
+      const wait = 60_000 - (now - this.queue[0]) + 100
+      await sleep(wait)
+      return this.throttle()
+    }
+
+    this.queue.push(Date.now())
+  },
+}
+
+// ─── PatentsView — Abstract Fetching ─────────────────────────────────────────
+
+async function fetchAbstract(patentNumber: string, apiKey: string): Promise<string | null> {
+  await patentsViewLimiter.throttle()
+
+  const q = encodeURIComponent(JSON.stringify({ patent_id: patentNumber }))
+  const f = encodeURIComponent(JSON.stringify(['patent_abstract', 'patent_id']))
+  const url = `https://search.patentsview.org/api/v1/patent/?q=${q}&f=${f}`
+
+  try {
+    const response = await fetch(url, { headers: { 'X-Api-Key': apiKey } })
+    if (!response.ok) return null
+
+    const data = (await response.json()) as {
+      patents?: Array<{ patent_abstract?: string | null }>
+      error?: boolean
+    }
+
+    if (data.error || !data.patents?.length) return null
+    return data.patents[0].patent_abstract ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Fetch abstracts for an entire batch in parallel chunks of 10.
+ * 700ms pause between chunks to stay well within the rate limit.
+ */
+async function fetchAllAbstracts(
+  patents: PatentRow[],
+  apiKey: string
+): Promise<Map<string, string | null>> {
+  const results = new Map<string, string | null>()
+  const CHUNK = 10
+
+  for (let i = 0; i < patents.length; i += CHUNK) {
+    const chunk = patents.slice(i, i + CHUNK)
+
+    const chunkResults = await Promise.all(
+      chunk.map((p) =>
+        fetchAbstract(p.patent_number, apiKey).then((abstract) => ({
+          number: p.patent_number,
+          abstract,
+        }))
+      )
+    )
+
+    chunkResults.forEach((r) => results.set(r.number, r.abstract))
+
+    // Brief pause between chunks — not strictly needed by the rate limiter
+    // but avoids burst patterns that can trigger soft limits
+    if (i + CHUNK < patents.length) {
+      await sleep(700)
+    }
+  }
+
+  return results
+}
+
+// ─── Google Patents — Diagram Check ──────────────────────────────────────────
+//
+// Checks whether a patent page has diagrams on Google Patents.
+// Sequential (not parallelized) with 1-3s random delay to avoid bot detection.
+// Circuit breaker: if blocked (403/429), stops checking for the rest of the batch.
+
+async function checkForDiagrams(
+  patentNumber: string,
+  blocked: { value: boolean }
+): Promise<boolean> {
+  if (blocked.value) return false
+
+  // Random delay — respectful crawling, not batched
+  await randomDelay(1_000, 3_000)
+
+  try {
+    // D1 stores patent numbers as digits only — Google Patents requires US prefix
+    const url = `https://patents.google.com/patent/US${patentNumber}`
+    const response = await fetch(url, { headers: { 'User-Agent': USER_AGENT } })
+
+    if (response.status === 429 || response.status === 403) {
+      blocked.value = true
+      console.warn(`Google Patents blocked on ${patentNumber} — diagram checks paused for this batch`)
+      return false
+    }
+
+    if (!response.ok) return false
+
+    const html = await response.text()
+    return html.includes('patentimages.storage.googleapis.com')
+  } catch {
+    return false
+  }
+}
+
+// ─── Claude Haiku — Scoring ───────────────────────────────────────────────────
+
+async function scoreWithHaiku(
+  patent: PatentRow,
+  abstract: string,
+  hasDiagrams: boolean,
+  promptTemplate: string,
+  apiKey: string
+): Promise<ScoringResult | null> {
+  const cpcDesc =
+    patent.cpc_section ? (CPC_DESCRIPTIONS[patent.cpc_section] ?? patent.cpc_section) : 'Unknown'
+
+  const prompt = fillTemplate(promptTemplate, {
+    patent_number: patent.patent_number,
+    title: patent.title,
+    assignee_name: patent.assignee_name ?? 'Unknown',
+    abstract,
+    cpc_section: patent.cpc_section ?? 'Unknown',
+    cpc_description: cpcDesc,
+    has_diagrams: hasDiagrams ? 'Yes' : 'No',
+  })
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: HAIKU_MODEL,
+        max_tokens: 512,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    })
+
+    if (!response.ok) {
+      console.error(`Haiku API error ${response.status} for patent ${patent.patent_number}`)
+      return null
+    }
+
+    const data = (await response.json()) as {
+      content: Array<{ type: string; text: string }>
+    }
+
+    const rawText = data.content[0]?.text ?? ''
+
+    // Strip markdown code fences if Haiku wrapped the JSON despite instructions
+    const jsonText = rawText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
+
+    const result = JSON.parse(jsonText) as ScoringResult
+
+    // Validate required fields are present and numeric
+    // Validate required numeric fields
+    const r = result as unknown as Record<string, unknown>
+    const required = ['consumer_relevance', 'relatability', 'explainability', 'visual_appeal', 'score']
+    for (const field of required) {
+      if (typeof r[field] !== 'number') {
+        console.error(`Haiku response missing field "${field}" for ${patent.patent_number}`)
+        return null
+      }
+    }
+
+    return result
+  } catch (err) {
+    console.error(`Failed to score patent ${patent.patent_number}:`, err)
+    return null
+  }
+}
+
+// ─── D1 Writes ────────────────────────────────────────────────────────────────
+
+async function fetchScoringPrompt(db: D1Database): Promise<string | null> {
+  const row = await db
+    .prepare(
+      "SELECT prompt_text FROM prompts WHERE prompt_type = 'scoring' AND is_active = 1 ORDER BY version DESC LIMIT 1"
+    )
+    .first<{ prompt_text: string }>()
+  return row?.prompt_text ?? null
+}
+
+async function saveScore(
+  db: D1Database,
+  patentNumber: string,
+  score: number,
+  abstract: string | null,
+  hasDiagrams: boolean,
+  result: ScoringResult | null
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO patent_scores
+        (patent_number, score, consumer_relevance, relatability,
+         explainability, visual_appeal, abstract, plain_english,
+         has_diagrams, reasoning)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(patent_number) DO NOTHING`
+    )
+    .bind(
+      patentNumber,
+      score,
+      result?.consumer_relevance ?? null,
+      result?.relatability ?? null,
+      result?.explainability ?? null,
+      result?.visual_appeal ?? null,
+      abstract,
+      result?.plain_english ?? null,
+      hasDiagrams ? 1 : 0,
+      result?.reasoning ?? null
+    )
+    .run()
+}
+
+// ─── Main Scoring Orchestrator ────────────────────────────────────────────────
+
+async function runScoringBatch(env: Env): Promise<BatchStats> {
+  const stats: BatchStats = {
+    fetched: 0,
+    no_abstract: 0,
+    no_diagrams: 0,
+    google_blocked: false,
+    scored: 0,
+    approved: 0,
+    errors: 0,
+  }
+
+  // 1. Load active scoring prompt from D1
+  const promptTemplate = await fetchScoringPrompt(env.DB)
+  if (!promptTemplate) {
+    console.error('No active scoring prompt in prompts table — aborting batch')
+    return stats
+  }
+
+  // 2. Fetch unscored expired utility patents
+  //    - Random order across all CPC sections (no class bias)
+  //    - Excludes design patents (D% prefix) and already-scored patents
+  const { results: patents } = await env.DB.prepare(
+    `SELECT patent_number, title, assignee_name, cpc_section,
+            calculated_expiration_date, filing_date, grant_date
+     FROM patents
+     WHERE status = 'Expired'
+       AND enriched = 1
+       AND title IS NOT NULL
+       AND patent_number NOT LIKE 'D%'
+       AND patent_number NOT IN (SELECT patent_number FROM patent_scores)
+     ORDER BY RANDOM()
+     LIMIT ?`
+  )
+    .bind(BATCH_SIZE)
+    .all<PatentRow>()
+
+  stats.fetched = patents.length
+
+  if (patents.length === 0) {
+    console.log('No unscored patents remaining in pool')
+    return stats
+  }
+
+  // 3. Fetch all abstracts from PatentsView in parallel chunks
+  const abstracts = await fetchAllAbstracts(patents, env.PATENTSVIEW_API_KEY)
+
+  // 4. Process each patent sequentially
+  //    Google Patents must be sequential with random delays — never parallel
+  const googleBlocked = { value: false }
+
+  for (const patent of patents) {
+    try {
+      const abstract = abstracts.get(patent.patent_number) ?? null
+
+      // No abstract — save as score=0 to prevent future re-processing
+      if (!abstract) {
+        stats.no_abstract++
+        await saveScore(env.DB, patent.patent_number, 0, null, false, null)
+        continue
+      }
+
+      // Diagram check — sequential, 1-3s delay, circuit breaker
+      const hasDiagrams = await checkForDiagrams(patent.patent_number, googleBlocked)
+      if (googleBlocked.value) stats.google_blocked = true
+
+      // No diagrams — auto-reject (visual content required), save to prevent re-processing
+      if (!hasDiagrams) {
+        stats.no_diagrams++
+        await saveScore(env.DB, patent.patent_number, 0, abstract, false, null)
+        continue
+      }
+
+      // Score with Claude Haiku
+      const result = await scoreWithHaiku(
+        patent,
+        abstract,
+        hasDiagrams,
+        promptTemplate,
+        env.ANTHROPIC_API_KEY
+      )
+
+      if (!result) {
+        // Haiku call failed or returned invalid JSON — save score=0 to avoid retry loop
+        stats.errors++
+        await saveScore(env.DB, patent.patent_number, 0, abstract, hasDiagrams, null)
+        continue
+      }
+
+      await saveScore(env.DB, patent.patent_number, result.score, abstract, hasDiagrams, result)
+      stats.scored++
+      if (result.score >= 8) stats.approved++
+
+      console.log(
+        `[${result.score}/10] ${patent.patent_number} — ${patent.title.slice(0, 60)}`
+      )
+    } catch (err) {
+      console.error(`Unhandled error on patent ${patent.patent_number}:`, err)
+      stats.errors++
+    }
+  }
+
+  console.log('Batch complete:', JSON.stringify(stats))
+  return stats
+}
+
+// ─── Worker Export ────────────────────────────────────────────────────────────
+
 export default {
-  // Cron trigger — fires every 5 minutes automatically
+  // Cron trigger — fires every 5 minutes, no human action needed
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(runScoringBatch(env))
   },
 
-  // Manual trigger — "Run Now" button in admin calls this
+  // Fetch handler — "Run Now" button in admin POSTs here
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405 })
     }
 
-    const result = await runScoringBatch(env)
-    return Response.json(result)
-  },
-}
+    // Verify request comes from our admin (shared secret)
+    const authHeader = request.headers.get('x-worker-secret')
+    if (!authHeader || authHeader !== env.WORKER_AUTH_SECRET) {
+      return new Response('Unauthorized', { status: 401 })
+    }
 
-async function runScoringBatch(_env: Env): Promise<{ success: boolean; message: string }> {
-  // Implemented in Stage 2
-  return { success: true, message: 'Scorer not yet implemented — Stage 2' }
+    try {
+      const stats = await runScoringBatch(env)
+      return Response.json({ success: true, stats })
+    } catch (err) {
+      console.error('Scoring batch failed:', err)
+      return Response.json({ success: false, error: (err as Error).message }, { status: 500 })
+    }
+  },
 }

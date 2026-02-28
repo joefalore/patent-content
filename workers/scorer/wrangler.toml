@@ -19,6 +19,7 @@ bucket_name = "patent-images"
 [vars]
 DOMAIN = "inventiongenie.com"
 
-# Secrets (set via: wrangler secret put ANTHROPIC_API_KEY)
-# ANTHROPIC_API_KEY — never put in this file, it gets committed to git
-# PATENTSVIEW_API_KEY — same
+# Secrets — set via: wrangler secret put <NAME>
+# ANTHROPIC_API_KEY
+# PATENTSVIEW_API_KEY
+# WORKER_AUTH_SECRET   (shared with Next.js SCORER_WORKER_SECRET env var)
