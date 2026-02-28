@@ -1,0 +1,18 @@
+name: Score Patents
+
+on:
+  schedule:
+    # Every 5 minutes — calls the scorer worker HTTP endpoint
+    - cron: '*/5 * * * *'
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Trigger scorer
+        run: |
+          curl -sf -X POST \
+            -H "x-worker-secret: ${{ secrets.WORKER_AUTH_SECRET }}" \
+            "${{ secrets.SCORER_WORKER_URL }}"
