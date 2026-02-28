@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { PatentReviewTab } from '@/components/admin/PatentReviewTab'
 import { ContentReviewTab } from '@/components/admin/ContentReviewTab'
+import { PublishedTab } from '@/components/admin/PublishedTab'
 import type { ScoredPatent } from '@/types'
 import type { PipelineStats } from '@/app/api/admin/stats/route'
 
@@ -100,6 +101,7 @@ export default function AdminPage() {
               <StatPill label="Pending Review" value={stats.total_reviewable} accent />
               <StatPill label="Approved" value={stats.total_approved} />
               <StatPill label="Content Ready" value={stats.content_pending} />
+              <StatPill label="Ready to Post" value={stats.content_approved} accent />
               <StatPill label="Published" value={stats.content_published} />
             </div>
           </div>
@@ -147,7 +149,7 @@ export default function AdminPage() {
             )}
 
             {tab === 'published' && (
-              <Placeholder title="Published" stage="Stage 7" />
+              <PublishedTab onAction={fetchData} />
             )}
 
             {tab === 'prompts' && (
