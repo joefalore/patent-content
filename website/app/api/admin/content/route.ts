@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { queryD1, executeD1 } from '@/lib/db'
+import { queryD1, queryAppD1, executeAppD1 } from '@/lib/db'
 import type { ContentQueueItemWithPatent } from '@/types'
 
 // Fields the admin is allowed to edit inline — whitelist prevents SQL injection
@@ -12,26 +12,61 @@ const EDITABLE_FIELDS = new Set([
 ])
 
 // GET /api/admin/content
-// Returns all content_queue items with status='pending', joined with patents
 export async function GET() {
   try {
-    const items = await queryD1<ContentQueueItemWithPatent>(`
-      SELECT
-        cq.id, cq.patent_number, cq.score,
-        cq.diagram_urls, cq.caption_twitter, cq.caption_fbli,
-        cq.web_summary, cq.web_insights, cq.image_overlay_text, cq.social_image_url,
-        cq.url_slug, cq.url_full,
-        cq.scrape_status, cq.scrape_attempts, cq.scrape_error,
-        cq.status, cq.created_at,
-        p.title, p.assignee_name, p.calculated_expiration_date
-      FROM content_queue cq
-      JOIN patents p ON p.patent_number = cq.patent_number
-      WHERE cq.status = 'pending'
-      ORDER BY cq.created_at DESC
+    // 1. Query content_queue from inventiongenie-db
+    const items = await queryAppD1<{
+      id: number; patent_number: string; score: number
+      diagram_urls: string | null; caption_twitter: string | null; caption_fbli: string | null
+      web_summary: string | null; web_insights: string | null
+      image_overlay_text: string | null; social_image_url: string | null
+      url_slug: string; url_full: string
+      scrape_status: string; scrape_attempts: number; scrape_error: string | null
+      status: string; created_at: string
+    }>(`
+      SELECT id, patent_number, score,
+        diagram_urls, caption_twitter, caption_fbli,
+        web_summary, web_insights, image_overlay_text, social_image_url,
+        url_slug, url_full,
+        scrape_status, scrape_attempts, scrape_error,
+        status, created_at
+      FROM content_queue
+      WHERE status = 'pending'
+      ORDER BY created_at DESC
       LIMIT 50
     `)
 
-    return NextResponse.json({ items })
+    if (items.length === 0) return NextResponse.json({ items: [] })
+
+    // 2. Fetch patent metadata from patent-tracker-db
+    const numbers = items.map(i => i.patent_number)
+    const placeholders = numbers.map(() => '?').join(', ')
+    const patentRows = await queryD1<{
+      patent_number: string; title: string; assignee_name: string | null
+      calculated_expiration_date: string | null; filing_date: string | null; grant_date: string | null
+    }>(
+      `SELECT patent_number, title, assignee_name, calculated_expiration_date, filing_date, grant_date
+       FROM patents WHERE patent_number IN (${placeholders})`,
+      numbers
+    )
+
+    const patentMap = new Map(patentRows.map(p => [p.patent_number, p]))
+
+    // 3. Merge
+    const merged: ContentQueueItemWithPatent[] = items.map(i => ({
+      ...i,
+      approved_at: null,
+      published_at: null,
+      research_summary: null,
+      research_insights: null,
+      title: patentMap.get(i.patent_number)?.title ?? '',
+      assignee_name: patentMap.get(i.patent_number)?.assignee_name ?? null,
+      calculated_expiration_date: patentMap.get(i.patent_number)?.calculated_expiration_date ?? null,
+      filing_date: patentMap.get(i.patent_number)?.filing_date ?? null,
+      grant_date: patentMap.get(i.patent_number)?.grant_date ?? null,
+    }))
+
+    return NextResponse.json({ items: merged })
   } catch (err) {
     console.error('GET /api/admin/content error:', err)
     return NextResponse.json({ error: 'Failed to fetch content items' }, { status: 500 })
@@ -39,13 +74,10 @@ export async function GET() {
 }
 
 // PATCH /api/admin/content
-// Inline field edit. Body: { patent_number, field, value }
 export async function PATCH(request: Request) {
   try {
     const { patent_number, field, value } = await request.json() as {
-      patent_number: string
-      field: string
-      value: string
+      patent_number: string; field: string; value: string
     }
 
     if (!patent_number || !field) {
@@ -60,8 +92,7 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: 'Twitter caption must be 240 characters or less' }, { status: 400 })
     }
 
-    // field is safe — validated against whitelist above
-    await executeD1(
+    await executeAppD1(
       `UPDATE content_queue SET ${field} = ? WHERE patent_number = ? AND status = 'pending'`,
       [value, patent_number]
     )
@@ -74,12 +105,10 @@ export async function PATCH(request: Request) {
 }
 
 // POST /api/admin/content
-// Body: { action: 'approve' | 'reject', patent_number: string }
 export async function POST(request: Request) {
   try {
     const { action, patent_number } = await request.json() as {
-      action: 'approve' | 'reject'
-      patent_number: string
+      action: 'approve' | 'reject'; patent_number: string
     }
 
     if (!patent_number) {
@@ -91,12 +120,12 @@ export async function POST(request: Request) {
     }
 
     if (action === 'approve') {
-      await executeD1(
+      await executeAppD1(
         `UPDATE content_queue SET status = 'approved', approved_at = CURRENT_TIMESTAMP WHERE patent_number = ?`,
         [patent_number]
       )
     } else {
-      await executeD1(
+      await executeAppD1(
         `UPDATE content_queue SET status = 'rejected' WHERE patent_number = ?`,
         [patent_number]
       )

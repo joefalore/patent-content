@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { queryD1, executeD1 } from '@/lib/db'
+import { queryD1, queryAppD1, executeAppD1 } from '@/lib/db'
 import type { ScoredPatent } from '@/types'
 
 // Fire content generation for each approved patent — no await (best-effort)
@@ -25,22 +25,57 @@ function triggerGenerator(patentNumbers: string[]) {
 // Returns all scored patents with score >= 7, not yet approved or rejected
 export async function GET() {
   try {
-    const patents = await queryD1<ScoredPatent>(`
-      SELECT
-        ps.id, ps.patent_number, ps.score,
-        ps.consumer_relevance, ps.relatability, ps.explainability, ps.visual_appeal,
-        ps.abstract, ps.plain_english, ps.reasoning, ps.has_diagrams,
-        ps.scored_at, ps.approved_for_content, ps.approved_at, ps.rejected,
-        p.title, p.assignee_name, p.cpc_section,
-        p.calculated_expiration_date, p.filing_date, p.grant_date
-      FROM patent_scores ps
-      JOIN patents p ON p.patent_number = ps.patent_number
-      WHERE ps.score >= 7
-        AND ps.approved_for_content = 0
-        AND (ps.rejected IS NULL OR ps.rejected = 0)
-      ORDER BY ps.score DESC, ps.scored_at DESC
+    // 1. Query patent_scores from inventiongenie-db
+    const scores = await queryAppD1<{
+      id: number; patent_number: string; score: number
+      consumer_relevance: number | null; relatability: number | null
+      explainability: number | null; visual_appeal: number | null
+      abstract: string | null; plain_english: string | null; reasoning: string | null
+      has_diagrams: number; scored_at: string
+      approved_for_content: number; approved_at: string | null; rejected: number
+    }>(`
+      SELECT id, patent_number, score,
+        consumer_relevance, relatability, explainability, visual_appeal,
+        abstract, plain_english, reasoning, has_diagrams,
+        scored_at, approved_for_content, approved_at, rejected
+      FROM patent_scores
+      WHERE score >= 7
+        AND approved_for_content = 0
+        AND (rejected IS NULL OR rejected = 0)
+      ORDER BY score DESC, scored_at DESC
       LIMIT 200
     `)
+
+    if (scores.length === 0) {
+      return NextResponse.json({ patents: [] })
+    }
+
+    // 2. Fetch patent metadata from patent-tracker-db
+    const numbers = scores.map(s => s.patent_number)
+    const placeholders = numbers.map(() => '?').join(', ')
+    const patentRows = await queryD1<{
+      patent_number: string; title: string; assignee_name: string | null
+      cpc_section: string | null; calculated_expiration_date: string | null
+      filing_date: string | null; grant_date: string | null
+    }>(
+      `SELECT patent_number, title, assignee_name, cpc_section,
+              calculated_expiration_date, filing_date, grant_date
+       FROM patents WHERE patent_number IN (${placeholders})`,
+      numbers
+    )
+
+    const patentMap = new Map(patentRows.map(p => [p.patent_number, p]))
+
+    // 3. Merge
+    const patents: ScoredPatent[] = scores.map(s => ({
+      ...s,
+      title: patentMap.get(s.patent_number)?.title ?? '',
+      assignee_name: patentMap.get(s.patent_number)?.assignee_name ?? null,
+      cpc_section: patentMap.get(s.patent_number)?.cpc_section ?? null,
+      calculated_expiration_date: patentMap.get(s.patent_number)?.calculated_expiration_date ?? null,
+      filing_date: patentMap.get(s.patent_number)?.filing_date ?? null,
+      grant_date: patentMap.get(s.patent_number)?.grant_date ?? null,
+    }))
 
     return NextResponse.json({ patents })
   } catch (err) {
@@ -66,21 +101,18 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'action must be approve or reject' }, { status: 400 })
     }
 
-    // Build parameterized IN clause
     const placeholders = patent_numbers.map(() => '?').join(', ')
 
     if (action === 'approve') {
-      await executeD1(
+      await executeAppD1(
         `UPDATE patent_scores
          SET approved_for_content = 1, approved_at = CURRENT_TIMESTAMP
          WHERE patent_number IN (${placeholders})`,
         patent_numbers
       )
-
-      // Fire-and-forget content generation for each approved patent
       triggerGenerator(patent_numbers)
     } else {
-      await executeD1(
+      await executeAppD1(
         `UPDATE patent_scores SET rejected = 1 WHERE patent_number IN (${placeholders})`,
         patent_numbers
       )

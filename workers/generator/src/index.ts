@@ -6,7 +6,8 @@
  */
 
 export interface Env {
-  DB: D1Database
+  PATENTS_DB: D1Database  // patent-tracker-db — patents table (read-only)
+  APP_DB: D1Database      // inventiongenie-db — patent_scores, content_queue, prompts
   R2_BUCKET: R2Bucket
   ANTHROPIC_API_KEY: string
   WORKER_AUTH_SECRET: string
@@ -91,7 +92,7 @@ async function generateContent(patentNumber: string, env: Env): Promise<Generate
   }
 
   // 2. Idempotency check — skip if already generated (unless failed)
-  const existing = await env.DB
+  const existing = await env.APP_DB
     .prepare('SELECT id, status FROM content_queue WHERE patent_number = ?')
     .bind(patentNumber)
     .first<{ id: number; status: string }>()
@@ -134,7 +135,7 @@ async function generateContent(patentNumber: string, env: Env): Promise<Generate
   // 5. Save to content_queue
   if (!content) {
     // Save with failed status — can be retried
-    await env.DB
+    await env.APP_DB
       .prepare(`
         INSERT INTO content_queue (
           patent_number, score, diagram_urls, url_slug, url_full,
@@ -158,7 +159,7 @@ async function generateContent(patentNumber: string, env: Env): Promise<Generate
     return { success: false, error: contentError ?? scrapeError ?? 'Unknown error' }
   }
 
-  await env.DB
+  await env.APP_DB
     .prepare(`
       INSERT INTO content_queue (
         patent_number, score,
@@ -211,17 +212,35 @@ async function generateContent(patentNumber: string, env: Env): Promise<Generate
 // ─── D1 data fetching ─────────────────────────────────────────────────────────
 
 async function fetchPatentData(patentNumber: string, env: Env): Promise<PatentData | null> {
-  return env.DB
-    .prepare(`
-      SELECT
-        ps.patent_number, ps.score, ps.abstract, ps.approved_for_content,
-        p.title, p.assignee_name, p.calculated_expiration_date
-      FROM patent_scores ps
-      JOIN patents p ON p.patent_number = ps.patent_number
-      WHERE ps.patent_number = ? AND ps.approved_for_content = 1
-    `)
+  // APP_DB: get scoring data (includes abstract and approval status)
+  const scoreRow = await env.APP_DB
+    .prepare(
+      'SELECT patent_number, score, abstract, approved_for_content FROM patent_scores WHERE patent_number = ? AND approved_for_content = 1'
+    )
     .bind(patentNumber)
-    .first<PatentData>()
+    .first<{ patent_number: string; score: number; abstract: string | null; approved_for_content: number }>()
+
+  if (!scoreRow) return null
+
+  // PATENTS_DB: get patent metadata
+  const patentRow = await env.PATENTS_DB
+    .prepare(
+      'SELECT title, assignee_name, calculated_expiration_date FROM patents WHERE patent_number = ?'
+    )
+    .bind(patentNumber)
+    .first<{ title: string; assignee_name: string | null; calculated_expiration_date: string | null }>()
+
+  if (!patentRow) return null
+
+  return {
+    patent_number: scoreRow.patent_number,
+    score: scoreRow.score,
+    abstract: scoreRow.abstract,
+    approved_for_content: scoreRow.approved_for_content,
+    title: patentRow.title,
+    assignee_name: patentRow.assignee_name,
+    calculated_expiration_date: patentRow.calculated_expiration_date,
+  }
 }
 
 // ─── Google Patents scraper ───────────────────────────────────────────────────
@@ -282,8 +301,8 @@ async function generateWithSonnet(
   description: string,
   env: Env,
 ): Promise<GeneratedContent> {
-  // Fetch active content_generation prompt from D1
-  const promptRow = await env.DB
+  // Fetch active content_generation prompt from inventiongenie-db
+  const promptRow = await env.APP_DB
     .prepare(`
       SELECT prompt_text FROM prompts
       WHERE prompt_type = 'content_generation' AND is_active = 1

@@ -13,7 +13,8 @@
  */
 
 export interface Env {
-  DB: D1Database
+  PATENTS_DB: D1Database  // patent-tracker-db — patents table (read-only)
+  APP_DB: D1Database      // inventiongenie-db — patent_scores, prompts (read/write)
   R2_BUCKET: R2Bucket
   ANTHROPIC_API_KEY: string
   PATENTSVIEW_API_KEY: string
@@ -338,17 +339,18 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
     errors: 0,
   }
 
-  // 1. Load active scoring prompt from D1
-  const promptTemplate = await fetchScoringPrompt(env.DB)
+  // 1. Load active scoring prompt from inventiongenie-db (APP_DB)
+  const promptTemplate = await fetchScoringPrompt(env.APP_DB)
   if (!promptTemplate) {
     console.error('No active scoring prompt in prompts table — aborting batch')
     return stats
   }
 
   // 2. Fetch unscored expired utility patents
-  //    - Random order across all CPC sections (no class bias)
-  //    - Excludes design patents (D% prefix) and already-scored patents
-  const { results: patents } = await env.DB.prepare(
+  //    - Oversample from PATENTS_DB (5x batch size) to account for already-scored overlap
+  //    - Can't use a cross-DB subquery, so filter in code after checking APP_DB
+  const OVERSAMPLE = BATCH_SIZE * 5
+  const { results: candidates } = await env.PATENTS_DB.prepare(
     `SELECT patent_number, title, assignee_name, cpc_section,
             calculated_expiration_date, filing_date, grant_date
      FROM patents
@@ -356,12 +358,23 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
        AND enriched = 1
        AND title IS NOT NULL
        AND patent_number NOT LIKE 'D%'
-       AND patent_number NOT IN (SELECT patent_number FROM patent_scores)
      ORDER BY RANDOM()
      LIMIT ?`
   )
-    .bind(BATCH_SIZE)
+    .bind(OVERSAMPLE)
     .all<PatentRow>()
+
+  // Filter out already-scored patents by querying APP_DB with the candidate numbers
+  let patents: PatentRow[] = candidates
+  if (candidates.length > 0) {
+    const candidateNumbers = candidates.map(c => c.patent_number)
+    const placeholders = candidateNumbers.map(() => '?').join(', ')
+    const { results: scoredRows } = await env.APP_DB.prepare(
+      `SELECT patent_number FROM patent_scores WHERE patent_number IN (${placeholders})`
+    ).bind(...candidateNumbers).all<{ patent_number: string }>()
+    const scoredSet = new Set(scoredRows.map(r => r.patent_number))
+    patents = candidates.filter(c => !scoredSet.has(c.patent_number)).slice(0, BATCH_SIZE)
+  }
 
   stats.fetched = patents.length
 
@@ -384,7 +397,7 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
       // No abstract — save as score=0 to prevent future re-processing
       if (!abstract) {
         stats.no_abstract++
-        await saveScore(env.DB, patent.patent_number, 0, null, false, null)
+        await saveScore(env.APP_DB, patent.patent_number, 0, null, false, null)
         continue
       }
 
@@ -395,7 +408,7 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
       // No diagrams — auto-reject (visual content required), save to prevent re-processing
       if (!hasDiagrams) {
         stats.no_diagrams++
-        await saveScore(env.DB, patent.patent_number, 0, abstract, false, null)
+        await saveScore(env.APP_DB, patent.patent_number, 0, abstract, false, null)
         continue
       }
 
@@ -411,11 +424,11 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
       if (!result) {
         // Haiku call failed or returned invalid JSON — save score=0 to avoid retry loop
         stats.errors++
-        await saveScore(env.DB, patent.patent_number, 0, abstract, hasDiagrams, null)
+        await saveScore(env.APP_DB, patent.patent_number, 0, abstract, hasDiagrams, null)
         continue
       }
 
-      await saveScore(env.DB, patent.patent_number, result.score, abstract, hasDiagrams, result)
+      await saveScore(env.APP_DB, patent.patent_number, result.score, abstract, hasDiagrams, result)
       stats.scored++
       if (result.score >= 8) stats.approved++
 

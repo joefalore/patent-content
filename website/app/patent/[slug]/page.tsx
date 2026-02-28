@@ -12,7 +12,7 @@ import { cache } from 'react'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import type { Metadata } from 'next'
-import { queryD1 } from '@/lib/db'
+import { queryD1, queryAppD1 } from '@/lib/db'
 import { formatExpirationDate } from '@/lib/utils'
 
 // ─── ISR ──────────────────────────────────────────────────────────────────────
@@ -72,48 +72,65 @@ type RawPatentPageRow = Omit<PatentPageData, 'diagram_urls'> & {
   diagram_urls: string | null
 }
 
-// ─── Data fetch (cached per request) ─────────────────────────────────────────
+// ─── Data fetch (two-step: inventiongenie-db then patent-tracker-db) ──────────
+
+// Raw row from inventiongenie-db — content_queue joined with patent_scores
+type AppRow = Omit<RawPatentPageRow,
+  'title' | 'assignee_name' | 'cpc_section' | 'filing_date' | 'grant_date' |
+  'calculated_expiration_date' | 'pta_days' | 'pte_154_days' | 'pte_156_days' |
+  'td_exists' | 'mf_status'
+>
 
 const fetchPatentPage = cache(async (slug: string): Promise<PatentPageData | null> => {
-  let rows: RawPatentPageRow[]
-
   try {
-    rows = await queryD1<RawPatentPageRow>(
-      `
-      SELECT
+    // Step 1: content_queue + patent_scores from inventiongenie-db
+    const appRows = await queryAppD1<AppRow>(
+      `SELECT
         cq.patent_number, cq.score,
         cq.diagram_urls, cq.caption_twitter, cq.caption_fbli,
         cq.web_summary, cq.web_insights, cq.image_overlay_text, cq.social_image_url,
         cq.url_slug, cq.url_full, cq.status, cq.approved_at,
-        p.title, p.assignee_name, p.cpc_section,
-        p.filing_date, p.grant_date, p.calculated_expiration_date,
-        p.pta_days, p.pte_154_days, p.pte_156_days, p.td_exists, p.mf_status,
         ps.abstract, ps.plain_english
       FROM content_queue cq
-      JOIN patents p ON p.patent_number = cq.patent_number
       JOIN patent_scores ps ON ps.patent_number = cq.patent_number
       WHERE cq.url_slug = ? AND cq.status IN ('approved', 'published')
-      LIMIT 1
-      `,
+      LIMIT 1`,
       [slug]
     )
+
+    if (!appRows.length) return null
+    const appRow = appRows[0]
+
+    // Step 2: patent metadata from patent-tracker-db
+    const patentRows = await queryD1<{
+      title: string; assignee_name: string | null; cpc_section: string | null
+      filing_date: string | null; grant_date: string | null
+      calculated_expiration_date: string | null
+      pta_days: number | null; pte_154_days: number | null; pte_156_days: number | null
+      td_exists: number | null; mf_status: string | null
+    }>(
+      `SELECT title, assignee_name, cpc_section,
+        filing_date, grant_date, calculated_expiration_date,
+        pta_days, pte_154_days, pte_156_days, td_exists, mf_status
+      FROM patents WHERE patent_number = ?`,
+      [appRow.patent_number]
+    )
+
+    if (!patentRows.length) return null
+    const patentRow = patentRows[0]
+
+    let diagram_urls: string[] = []
+    try {
+      diagram_urls = appRow.diagram_urls ? (JSON.parse(appRow.diagram_urls) as string[]) : []
+    } catch {
+      diagram_urls = []
+    }
+
+    return { ...appRow, ...patentRow, diagram_urls }
   } catch (err) {
     console.error('fetchPatentPage D1 error:', err)
     return null
   }
-
-  if (!rows.length) return null
-
-  const row = rows[0]
-
-  let diagram_urls: string[] = []
-  try {
-    diagram_urls = row.diagram_urls ? (JSON.parse(row.diagram_urls) as string[]) : []
-  } catch {
-    diagram_urls = []
-  }
-
-  return { ...row, diagram_urls }
 })
 
 // ─── SEO metadata ─────────────────────────────────────────────────────────────

@@ -5,9 +5,14 @@ compatibility_date = "2025-01-01"
 # Triggered by Next.js API route when a patent is approved — no cron needed
 
 [[d1_databases]]
-binding = "DB"
+binding = "PATENTS_DB"
 database_name = "patent-tracker-db"
 database_id = "5cedf456-980d-4276-8d4d-bdf169d92cf4"
+
+[[d1_databases]]
+binding = "APP_DB"
+database_name = "inventiongenie-db"
+database_id = "94044bcb-eabc-4072-9890-9a783862d3ee"
 
 [[r2_buckets]]
 binding = "R2_BUCKET"

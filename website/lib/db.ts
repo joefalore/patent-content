@@ -1,13 +1,17 @@
 /**
  * D1 REST API client for Next.js on Vercel.
  *
+ * Two databases:
+ *   queryD1 / executeD1      → patent-tracker-db (CF_D1_DATABASE_ID)   — patents table, READ ONLY
+ *   queryAppD1 / executeAppD1 → inventiongenie-db (APP_D1_DATABASE_ID)  — our tables, read/write
+ *
  * IMPORTANT: Do NOT use getRequestContext() from @cloudflare/next-on-pages —
  * that only works on Cloudflare Pages deployments. This project deploys to Vercel.
- * Always use this REST API pattern for all Next.js D1 queries.
  */
 
 const CLOUDFLARE_ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID!
 const CF_D1_DATABASE_ID = process.env.CF_D1_DATABASE_ID!
+const APP_D1_DATABASE_ID = process.env.APP_D1_DATABASE_ID!
 const CLOUDFLARE_API_TOKEN = process.env.CLOUDFLARE_API_TOKEN!
 
 interface D1Response<T> {
@@ -20,12 +24,9 @@ interface D1Response<T> {
   success: boolean
 }
 
-export async function queryD1<T = Record<string, unknown>>(
-  sql: string,
-  params: unknown[] = []
-): Promise<T[]> {
+async function d1Query<T>(databaseId: string, sql: string, params: unknown[] = []): Promise<T[]> {
   const response = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${CF_D1_DATABASE_ID}/query`,
+    `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${databaseId}/query`,
     {
       method: 'POST',
       headers: {
@@ -43,26 +44,17 @@ export async function queryD1<T = Record<string, unknown>>(
 
   const data = (await response.json()) as D1Response<T>
 
-  // D1 silently swallows some errors — always check both fields
   if (!data.success) {
     const msg = data.errors?.map((e) => e.message).join(', ') || 'Unknown D1 error'
     throw new Error(`D1 query failed: ${msg}`)
   }
 
-  if (!data.result?.[0]) {
-    return []
-  }
-
-  return data.result[0].results ?? []
+  return data.result?.[0]?.results ?? []
 }
 
-/**
- * Execute a write query (INSERT, UPDATE, DELETE).
- * Returns the number of rows affected.
- */
-export async function executeD1(sql: string, params: unknown[] = []): Promise<number> {
+async function d1Execute(databaseId: string, sql: string, params: unknown[] = []): Promise<number> {
   const response = await fetch(
-    `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${CF_D1_DATABASE_ID}/query`,
+    `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/d1/database/${databaseId}/query`,
     {
       method: 'POST',
       headers: {
@@ -86,4 +78,23 @@ export async function executeD1(sql: string, params: unknown[] = []): Promise<nu
   }
 
   return (data.result?.[0]?.meta as { changes?: number })?.changes ?? 0
+}
+
+// patent-tracker-db — patents table (READ ONLY)
+export function queryD1<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> {
+  return d1Query<T>(CF_D1_DATABASE_ID, sql, params)
+}
+
+// inventiongenie-db — patent_scores, content_queue, published_content, prompts
+export function queryAppD1<T = Record<string, unknown>>(sql: string, params: unknown[] = []): Promise<T[]> {
+  return d1Query<T>(APP_D1_DATABASE_ID, sql, params)
+}
+
+export function executeAppD1(sql: string, params: unknown[] = []): Promise<number> {
+  return d1Execute(APP_D1_DATABASE_ID, sql, params)
+}
+
+// Keep executeD1 pointing to app DB for backwards compatibility with generate-image route
+export function executeD1(sql: string, params: unknown[] = []): Promise<number> {
+  return d1Execute(APP_D1_DATABASE_ID, sql, params)
 }
