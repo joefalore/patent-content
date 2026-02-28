@@ -347,9 +347,10 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
   }
 
   // 2. Fetch unscored expired utility patents
-  //    - Oversample from PATENTS_DB (5x batch size) to account for already-scored overlap
+  //    - Oversample from PATENTS_DB (3x batch size) to account for already-scored overlap
+  //    - D1 binding hard limit: 100 SQL variables per query — oversample must stay under that
   //    - Can't use a cross-DB subquery, so filter in code after checking APP_DB
-  const OVERSAMPLE = BATCH_SIZE * 5
+  const OVERSAMPLE = BATCH_SIZE * 3  // 30 * 3 = 90 — safely under D1's 100-variable limit
   const { results: candidates } = await env.PATENTS_DB.prepare(
     `SELECT patent_number, title, assignee_name, cpc_section,
             calculated_expiration_date, filing_date, grant_date
