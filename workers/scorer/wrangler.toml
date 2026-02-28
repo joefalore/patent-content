@@ -2,10 +2,8 @@ name = "patent-scorer"
 main = "src/index.ts"
 compatibility_date = "2025-01-01"
 
-# Runs automatically every 5 minutes — no manual triggering needed
-# PatentsView rate limit (45 req/min) is enforced in code, not by this schedule
-[triggers]
-crons = ["*/5 * * * *"]
+# Scheduling handled by GitHub Actions (.github/workflows/score-patents.yml)
+# which POSTs to the worker HTTP endpoint every 5 minutes
 
 [[d1_databases]]
 binding = "DB"
