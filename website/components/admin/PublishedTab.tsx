@@ -87,6 +87,7 @@ function ImageGenerator({
         body: JSON.stringify({
           diagramUrl: selected,
           overlayText: overlayText ?? 'Patent Expired',
+          patent_number: patentNumber,
         }),
       })
       if (!res.ok) throw new Error(`Image generation failed (${res.status})`)

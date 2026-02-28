@@ -307,6 +307,7 @@ function ContentCard({
         body: JSON.stringify({
           diagramUrl: selectedDiagram,
           overlayText: item.image_overlay_text ?? 'Patent Expired',
+          patent_number: item.patent_number,
         }),
       })
 
