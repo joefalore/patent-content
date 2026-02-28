@@ -122,6 +122,17 @@ export interface Prompt {
   notes: string | null
 }
 
+// Admin pipeline stats
+export interface PipelineStats {
+  total_scored: number
+  total_reviewable: number
+  total_high_score: number
+  total_approved: number
+  content_pending: number
+  content_approved: number
+  content_published: number
+}
+
 // Claude Haiku scoring response (parsed from JSON)
 export interface ScoringResult {
   plain_english: string

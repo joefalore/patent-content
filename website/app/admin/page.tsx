@@ -6,7 +6,7 @@ import { PatentReviewTab } from '@/components/admin/PatentReviewTab'
 import { ContentReviewTab } from '@/components/admin/ContentReviewTab'
 import { PublishedTab } from '@/components/admin/PublishedTab'
 import type { ScoredPatent } from '@/types'
-import type { PipelineStats } from '@/app/api/admin/stats/route'
+import type { PipelineStats } from '@/types'
 
 type Tab = 'patents' | 'content' | 'published' | 'prompts'
 
