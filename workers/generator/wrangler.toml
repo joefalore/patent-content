@@ -18,4 +18,4 @@ DOMAIN = "inventiongenie.com"
 
 # Secrets (set via: wrangler secret put ANTHROPIC_API_KEY)
 # ANTHROPIC_API_KEY — never put in this file
-# PATENTSVIEW_API_KEY — never put in this file
+# WORKER_AUTH_SECRET — never put in this file

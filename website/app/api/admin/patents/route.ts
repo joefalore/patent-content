@@ -2,6 +2,25 @@ import { NextResponse } from 'next/server'
 import { queryD1, executeD1 } from '@/lib/db'
 import type { ScoredPatent } from '@/types'
 
+// Fire content generation for each approved patent — no await (best-effort)
+function triggerGenerator(patentNumbers: string[]) {
+  const url = process.env.GENERATOR_WORKER_URL
+  const secret = process.env.GENERATOR_WORKER_SECRET
+
+  if (!url || url.includes('YOURSUBDOMAIN')) return
+
+  for (const patent_number of patentNumbers) {
+    fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-worker-secret': secret ?? '',
+      },
+      body: JSON.stringify({ patent_number }),
+    }).catch(err => console.error(`Generator trigger failed for ${patent_number}:`, err))
+  }
+}
+
 // GET /api/admin/patents
 // Returns all scored patents with score >= 7, not yet approved or rejected
 export async function GET() {
@@ -58,8 +77,8 @@ export async function POST(request: Request) {
         patent_numbers
       )
 
-      // Content generation is triggered here in Stage 4.
-      // For now, the approved flag in patent_scores is the signal.
+      // Fire-and-forget content generation for each approved patent
+      triggerGenerator(patent_numbers)
     } else {
       await executeD1(
         `UPDATE patent_scores SET rejected = 1 WHERE patent_number IN (${placeholders})`,
