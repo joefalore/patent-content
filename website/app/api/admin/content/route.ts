@@ -52,9 +52,11 @@ export async function GET() {
 
     const patentMap = new Map(patentRows.map(p => [p.patent_number, p]))
 
-    // 3. Merge
+    // 3. Merge — cast scrape_status/status to narrow union types (D1 returns string)
     const merged: ContentQueueItemWithPatent[] = items.map(i => ({
       ...i,
+      scrape_status: i.scrape_status as ContentQueueItemWithPatent['scrape_status'],
+      status: i.status as ContentQueueItemWithPatent['status'],
       approved_at: null,
       published_at: null,
       research_summary: null,

@@ -2,11 +2,20 @@
 
 ## Database Schemas
 
-### Add to Existing patent-tracker D1 Database
+### Two Separate D1 Databases
 
-**IMPORTANT:** These tables are added to the EXISTING `patent-tracker-db`. Do NOT create a new database.
+**IMPORTANT:** Two databases are in use. They are separate — D1 (SQLite) does NOT support cross-database JOINs.
 
-**Run AFTER creating tables, BEFORE deploying workers.**
+- **patent-tracker-db** (`CF_D1_DATABASE_ID = 5cedf456-980d-4276-8d4d-bdf169d92cf4`): PatentSunset's existing DB. Contains `patents` table. **READ ONLY.** At 500MB free-tier limit — do NOT write to it.
+- **inventiongenie-db** (`APP_D1_DATABASE_ID = 94044bcb-eabc-4072-9890-9a783862d3ee`): Our DB. Contains all 4 tables below. Read/write.
+
+**Cross-DB JOIN workaround:** Two sequential queries + in-memory Map merge. See `lib/db.ts` for the pattern.
+
+**Run against inventiongenie-db AFTER creating it, BEFORE deploying workers.**
+
+```bash
+wrangler d1 execute inventiongenie-db --file=schema.sql --remote
+```
 
 ```sql
 -- Track AI scoring results
@@ -141,11 +150,11 @@ CREATE INDEX idx_prompts_type_active ON prompts(prompt_type, is_active);
 CPC section is passed to Claude Haiku as context and used to order batches for a higher early hit rate — but never to hard-skip patents. Velcro is class D. Teflon is class C. Gore-Tex is class D. A blanket letter-level skip would silently eliminate iconic patents. Let the AI scorer decide.
 
 ```typescript
-// Order batches to surface higher-probability candidates first
-// A (Human Necessities) and H (Electronics) first, then everything else
-// But ALL sections are eligible — no hard skips
+// IMPORTANT: patents is in PATENTS_DB, patent_scores is in APP_DB.
+// Cross-DB subquery (NOT IN SELECT) is NOT possible in D1. Use oversample + filter:
 
-const D1_QUERY = `
+// Step 1: oversample 5x from PATENTS_DB
+const { results: candidates } = await env.PATENTS_DB.prepare(`
   SELECT patent_number, title, cpc_section, assignee_name,
          calculated_expiration_date, filing_date, grant_date
   FROM patents
@@ -153,15 +162,23 @@ const D1_QUERY = `
     AND enriched = 1
     AND title IS NOT NULL
     AND patent_number NOT LIKE 'D%'
-    AND patent_number NOT IN (SELECT patent_number FROM patent_scores)
   ORDER BY RANDOM()
-  LIMIT 50
-`
+  LIMIT 150
+`).bind().all()
+
+// Step 2: filter already-scored via APP_DB query + in-memory Set
+const nums = candidates.map(c => c.patent_number)
+const { results: scored } = await env.APP_DB.prepare(
+  `SELECT patent_number FROM patent_scores WHERE patent_number IN (${nums.map(() => '?').join(', ')})`
+).bind(...nums).all()
+const scoredSet = new Set(scored.map(r => r.patent_number))
+const patents = candidates.filter(c => !scoredSet.has(c.patent_number)).slice(0, 30)
+
 // No CPC ordering bias — random across all sections so content pool is thematically diverse.
 // No hardcoded assignee filter — Haiku receives assignee_name as scoring context and decides.
 // Design patents excluded (D% prefix) — ornamental only, no invention story to tell.
-// Scorer runs on Cloudflare Cron Trigger every 5 minutes. PatentsView rate limiter (45 req/min)
-// is enforced in code — the cron schedule is safely above that floor.
+// Scorer runs via GitHub Actions (.github/workflows/score-patents.yml) — not Cloudflare cron
+// (patent-tracker-workers uses all 5 free cron slots). GitHub Actions POSTs to scorer HTTP endpoint.
 ```
 
 **PatentsView API — Abstract Fetch:**

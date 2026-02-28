@@ -126,7 +126,7 @@ const fetchPatentPage = cache(async (slug: string): Promise<PatentPageData | nul
       diagram_urls = []
     }
 
-    return { ...appRow, ...patentRow, diagram_urls }
+    return { ...appRow, ...patentRow, diagram_urls } as PatentPageData
   } catch (err) {
     console.error('fetchPatentPage D1 error:', err)
     return null
