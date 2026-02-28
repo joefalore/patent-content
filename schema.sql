@@ -28,8 +28,9 @@ CREATE TABLE IF NOT EXISTS patent_scores (
   -- Metadata
   has_diagrams BOOLEAN DEFAULT 0,
   scored_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  approved_for_content BOOLEAN DEFAULT 0,
-  approved_at DATETIME
+  approved_for_content INTEGER DEFAULT 0,
+  approved_at DATETIME,
+  rejected INTEGER DEFAULT 0
 );
 
 CREATE INDEX idx_scores_score ON patent_scores(score DESC);

@@ -44,6 +44,7 @@ export interface PatentScore {
   scored_at: string
   approved_for_content: number
   approved_at: string | null
+  rejected: number
 }
 
 // patent_scores joined with patents — used in admin Patent Review tab
