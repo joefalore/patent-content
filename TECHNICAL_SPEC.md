@@ -54,7 +54,9 @@ CREATE TABLE IF NOT EXISTS content_queue (
   -- Generated content
   caption_twitter TEXT,
   caption_fbli TEXT,
-  web_content TEXT,
+  web_summary TEXT,        -- 2-3 sentence plain-English summary
+  web_insights TEXT,       -- 200-300 word insight section
+  image_overlay_text TEXT, -- 8-12 word overlay for social image
   social_image_url TEXT,
 
   -- Website
@@ -150,12 +152,16 @@ const D1_QUERY = `
   WHERE status = 'Expired'
     AND enriched = 1
     AND title IS NOT NULL
+    AND patent_number NOT LIKE 'D%'
     AND patent_number NOT IN (SELECT patent_number FROM patent_scores)
-  ORDER BY
-    CASE WHEN cpc_section IN ('A', 'H') THEN 0 ELSE 1 END,
-    RANDOM()
+  ORDER BY RANDOM()
   LIMIT 50
 `
+// No CPC ordering bias — random across all sections so content pool is thematically diverse.
+// No hardcoded assignee filter — Haiku receives assignee_name as scoring context and decides.
+// Design patents excluded (D% prefix) — ornamental only, no invention story to tell.
+// Scorer runs on Cloudflare Cron Trigger every 5 minutes. PatentsView rate limiter (45 req/min)
+// is enforced in code — the cron schedule is safely above that floor.
 ```
 
 **PatentsView API — Abstract Fetch:**
@@ -380,8 +386,9 @@ Respond ONLY with JSON (no markdown):
   "caption_fbli": "2-3 sentences, NO URL",
   "web_summary": "2-3 sentence plain English explanation",
   "web_insights": "200-300 words with interesting details and insights",
-  "image_overlay": "Patent Expired: Specific Description"
+  "image_overlay_text": "Patent Expired: Specific Description"
 }`
+// Maps to content_queue columns: caption_twitter, caption_fbli, web_summary, web_insights, image_overlay_text
 ```
 
 ---
@@ -770,20 +777,24 @@ name = "patent-scorer"
 main = "src/scorer.ts"
 compatibility_date = "2024-01-01"
 
+# Runs automatically every 5 minutes — no manual triggering required
+# PatentsView rate limit (45 req/min) is enforced in code, not by this schedule
+[triggers]
+crons = ["*/5 * * * *"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "patent-tracker-db"
 database_id = "5cedf456-980d-4276-8d4d-bdf169d92cf4"
 
 [vars]
-DOMAIN = "YOURBRAND.com"
+DOMAIN = "inventiongenie.com"
 ```
 
-### Secrets (set via wrangler)
+### Secrets (set via wrangler — NEVER put secret values in wrangler.toml)
 ```bash
-wrangler secret put ANTHROPIC_API_KEY
-wrangler secret put PATENTSVIEW_API_KEY
-# Paste key when prompted
+wrangler secret put ANTHROPIC_API_KEY && wrangler secret put PATENTSVIEW_API_KEY
+# Paste each key when prompted — Cloudflare encrypts and stores them securely
 ```
 
 ---

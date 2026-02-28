@@ -1,25 +1,26 @@
-# Media Brand Content Engine - Build Guide
+# InventionGenie — Media Brand Content Engine - Build Guide
 
 ## What We're Building
 
 An AI content flywheel that:
 1. Finds the most viral expired patents from ~320K+ enriched expired patents in the patent-tracker D1 database
 2. Generates SEO-optimized website pages + social media content
-3. Drives traffic from Twitter/Facebook/LinkedIn to monetized website pages
-4. Generates revenue through ads, affiliates, and PatentSunset referrals
+3. Drives traffic from Twitter/Facebook/LinkedIn to monetized website pages (inventiongenie.com)
+4. Generates revenue through AdSense and patent services affiliate deals
 
-**Core Value:** PatentSunset has valuable enriched patent data. We're building a media brand to surface the most interesting expired patents and monetize that content.
+**Core Value:** PatentSunset has valuable enriched patent data. InventionGenie is a separate media brand that surfaces the most interesting expired patents and monetizes that content through advertising and affiliates.
 
 ---
 
 ## Business Model
 
-**Traffic Source:** Social media (Twitter, Facebook, LinkedIn)
-**Traffic Destination:** YOURBRAND.com/patent/[slug] (SEO-optimized pages)
+**Traffic Source:** Social media (Twitter, Facebook, LinkedIn) — @InventionGenie
+**Traffic Destination:** inventiongenie.com/patent/[slug] (SEO-optimized pages)
 **Monetization:**
-- PatentSunset.com referrals (SaaS conversions)
-- Google AdSense (Phase 2)
-- Patent attorney affiliate links (Phase 2)
+- Google AdSense (primary — scales with traffic volume)
+- Patent attorney affiliate links (secondary)
+- Patent services affiliate deals (secondary)
+- PatentSunset.com: editorial CTA card on every patent page (backlinks + brand awareness, not a revenue mechanism — PatentSunset has no referral program)
 
 **Content Strategy:**
 - Educational media brand (not personal, not PatentSunset marketing)
@@ -138,16 +139,20 @@ Claude Haiku first translates the abstract into one plain-English sentence befor
 ### Milestone 1: Patent Discovery & Scoring
 
 **Feature 1.1: Batch Patent Scorer**
-- Fetches 50 unscored expired patents from D1 (CPC pre-filter applied in query)
+- Runs automatically via Cloudflare Cron Trigger every 5 minutes (no manual triggering required)
+- Fetches 50 unscored expired patents from D1 per run — random across all CPC sections, no class ordering or assignee filters
+- D1 query filters: `status='Expired' AND enriched=1 AND title IS NOT NULL AND patent_number NOT LIKE 'D%'`
 - Requirements: Must have title AND abstract (skip if PatentsView returns null)
-- For each patent: fetch abstract from PatentsView API + check Google Patents for diagrams
+- For each patent: fetch abstract from PatentsView API (rate-limited to 45 req/min) + check Google Patents for diagrams
+- Scoring context passed to Claude Haiku: patent_number, title, assignee_name, abstract, cpc_section, has_diagrams
 - Claude Haiku scores each patent on 4 criteria (1-10 each):
   - Consumer relevance
   - Relatability
   - Explainability
   - Visual appeal (diagrams required — auto-reject if none)
 - Keep ONLY 8+ scores
-- Save scores + abstract to `patent_scores` table
+- Save scores + abstract + plain_english translation to `patent_scores` table
+- Admin panel has manual "Run Now" button as emergency override only
 
 **Feature 1.2: Patent Review Admin**
 - Admin UI shows ALL scored patents with score >= 7 (not just 8+)

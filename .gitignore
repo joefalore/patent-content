@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.*
+
+# Next.js
+website/.next/
+website/out/
+
+# Env files — NEVER commit secrets
+.env
+.env.local
+.env*.local
+
+# Wrangler — secrets are stored in Cloudflare's encrypted store, not here
+.wrangler/
+workers/scorer/.wrangler/
+workers/generator/.wrangler/
+
+# OS
+.DS_Store
+*.pem
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+
+# Vercel
+.vercel

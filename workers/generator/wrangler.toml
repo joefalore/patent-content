@@ -1,0 +1,21 @@
+name = "patent-generator"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Triggered by Next.js API route when a patent is approved — no cron needed
+
+[[d1_databases]]
+binding = "DB"
+database_name = "patent-tracker-db"
+database_id = "5cedf456-980d-4276-8d4d-bdf169d92cf4"
+
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "patent-images"
+
+[vars]
+DOMAIN = "inventiongenie.com"
+
+# Secrets (set via: wrangler secret put ANTHROPIC_API_KEY)
+# ANTHROPIC_API_KEY — never put in this file
+# PATENTSVIEW_API_KEY — never put in this file

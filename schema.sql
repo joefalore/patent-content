@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS content_queue (
   -- Generated content
   caption_twitter TEXT,
   caption_fbli TEXT,
-  web_content TEXT,
+  web_summary TEXT,       -- 2-3 sentence plain-English summary
+  web_insights TEXT,      -- 200-300 word insight section
+  image_overlay_text TEXT, -- 8-12 word overlay for social image (e.g. "Patent Expired: Vertical Mouse Design")
   social_image_url TEXT,
 
   -- Website
