@@ -5,6 +5,9 @@ import {
   CheckCircle, XCircle, RefreshCw, Copy, Check,
   Download, ImageIcon, Pencil, ExternalLink,
 } from 'lucide-react'
+import { Toasts } from './Toasts'
+import { useToast } from '@/hooks/useToast'
+import type { ToastType } from '@/hooks/useToast'
 import type { ContentQueueItemWithPatent } from '@/types'
 import { formatExpirationDate } from '@/lib/utils'
 
@@ -263,10 +266,12 @@ function ContentCard({
   item: initialItem,
   onApproved,
   onRejected,
+  onToast,
 }: {
   item: ContentItem
   onApproved: (patentNumber: string) => void
   onRejected: (patentNumber: string) => void
+  onToast: (message: string, type: ToastType) => void
 }) {
   const [item, setItem] = useState(initialItem)
   const [selectedDiagram, setSelectedDiagram] = useState<string | null>(
@@ -329,10 +334,15 @@ function ContentCard({
       })
       if (!res.ok) throw new Error('Action failed')
 
-      if (action === 'approve') onApproved(item.patent_number)
-      else onRejected(item.patent_number)
+      if (action === 'approve') {
+        onToast('Content approved — page is now live', 'success')
+        onApproved(item.patent_number)
+      } else {
+        onToast('Content rejected', 'success')
+        onRejected(item.patent_number)
+      }
     } catch (err) {
-      alert(`Failed: ${(err as Error).message}`)
+      onToast(`Failed: ${(err as Error).message}`, 'error')
       setActionLoading(false)
     }
   }
@@ -348,12 +358,12 @@ function ContentCard({
       })
       const data = await res.json() as { success?: boolean; error?: string; message?: string }
       if (!res.ok || !data.success) {
-        alert(data.error ?? data.message ?? 'Regeneration failed')
+        onToast(data.error ?? data.message ?? 'Regeneration failed', 'error')
       } else {
-        alert('Content regeneration started. Refresh the page in ~30 seconds to see updated content.')
+        onToast('Regeneration queued — refresh in ~30s to see updated content', 'success')
       }
     } catch {
-      alert('Failed to reach generator worker')
+      onToast('Failed to reach generator worker', 'error')
     } finally {
       setRegenerating(false)
     }
@@ -585,6 +595,7 @@ export function ContentReviewTab({ onAction }: Props) {
   const [items, setItems] = useState<ContentItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const { toasts, addToast } = useToast()
 
   const fetchItems = useCallback(async () => {
     setLoading(true)
@@ -662,6 +673,7 @@ export function ContentReviewTab({ onAction }: Props) {
   }
 
   return (
+    <>
     <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex items-center justify-between">
@@ -685,9 +697,12 @@ export function ContentReviewTab({ onAction }: Props) {
             item={item}
             onApproved={handleApproved}
             onRejected={handleRejected}
+            onToast={addToast}
           />
         ))}
       </div>
     </div>
+    <Toasts toasts={toasts} />
+    </>
   )
 }

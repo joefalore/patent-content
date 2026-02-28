@@ -162,15 +162,6 @@ export default function AdminPage() {
   )
 }
 
-function Placeholder({ title, stage }: { title: string; stage: string }) {
-  return (
-    <div className="py-16 text-center">
-      <p className="text-gray-400 text-sm font-medium">{title}</p>
-      <p className="text-gray-300 text-xs mt-1">Coming in {stage}</p>
-    </div>
-  )
-}
-
 function PromptsPlaceholder() {
   return (
     <div className="py-16 text-center">

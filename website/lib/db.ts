@@ -33,6 +33,7 @@ export async function queryD1<T = Record<string, unknown>>(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ sql, params }),
+      signal: AbortSignal.timeout(30_000),
     }
   )
 
@@ -69,6 +70,7 @@ export async function executeD1(sql: string, params: unknown[] = []): Promise<nu
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ sql, params }),
+      signal: AbortSignal.timeout(30_000),
     }
   )
 

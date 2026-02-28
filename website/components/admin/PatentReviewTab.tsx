@@ -3,6 +3,8 @@
 import { useState, useCallback } from 'react'
 import { ExternalLink, CheckCircle, XCircle, ChevronDown, ChevronUp } from 'lucide-react'
 import { ScoreBreakdown } from './ScoreBreakdown'
+import { Toasts } from './Toasts'
+import { useToast } from '@/hooks/useToast'
 import { formatExpirationDate } from '@/lib/utils'
 import type { ScoredPatent } from '@/types'
 
@@ -168,6 +170,7 @@ export function PatentReviewTab({ patents, onAction }: Props) {
   const [loading, setLoading] = useState(false)
   const [runNowLoading, setRunNowLoading] = useState(false)
   const [runNowResult, setRunNowResult] = useState<BatchStats | string | null>(null)
+  const { toasts, addToast } = useToast()
 
   const highScore = patents.filter((p) => p.score >= 8)
   const reviewScore = patents.filter((p) => p.score === 7)
@@ -194,8 +197,16 @@ export function PatentReviewTab({ patents, onAction }: Props) {
       if (!res.ok) throw new Error('Action failed')
       setSelected(new Set())
       onAction()
+      const count = patentNumbers.length
+      const label = count === 1 ? '1 patent' : `${count} patents`
+      addToast(
+        action === 'approve'
+          ? `${label} approved — content generation queued`
+          : `${label} rejected`,
+        'success'
+      )
     } catch (err) {
-      alert(`Failed: ${(err as Error).message}`)
+      addToast(`Failed: ${(err as Error).message}`, 'error')
     } finally {
       setLoading(false)
     }
@@ -222,26 +233,30 @@ export function PatentReviewTab({ patents, onAction }: Props) {
 
   if (patents.length === 0) {
     return (
-      <div className="py-16 text-center">
-        <p className="text-gray-500 text-sm">No patents pending review.</p>
-        <p className="text-gray-400 text-xs mt-1">
-          Run the scorer to find high-scoring patents.
-        </p>
-        <button
-          onClick={runNow}
-          disabled={runNowLoading}
-          className="mt-4 px-4 py-2 bg-red-600 text-white text-sm font-medium rounded hover:bg-red-700 disabled:opacity-50 transition-colors"
-        >
-          {runNowLoading ? 'Running...' : 'Run Scorer Now'}
-        </button>
-        {runNowResult && (
-          <RunNowResult result={runNowResult} />
-        )}
-      </div>
+      <>
+        <div className="py-16 text-center">
+          <p className="text-gray-500 text-sm">No patents pending review.</p>
+          <p className="text-gray-400 text-xs mt-1">
+            Run the scorer to find high-scoring patents.
+          </p>
+          <button
+            onClick={runNow}
+            disabled={runNowLoading}
+            className="mt-4 px-4 py-2 bg-red-600 text-white text-sm font-medium rounded hover:bg-red-700 disabled:opacity-50 transition-colors"
+          >
+            {runNowLoading ? 'Running...' : 'Run Scorer Now'}
+          </button>
+          {runNowResult && (
+            <RunNowResult result={runNowResult} />
+          )}
+        </div>
+        <Toasts toasts={toasts} />
+      </>
     )
   }
 
   return (
+    <>
     <div className="space-y-4">
       {/* Toolbar */}
       <div className="flex items-center justify-between flex-wrap gap-3">
@@ -334,6 +349,8 @@ export function PatentReviewTab({ patents, onAction }: Props) {
         </section>
       )}
     </div>
+    <Toasts toasts={toasts} />
+    </>
   )
 }
 

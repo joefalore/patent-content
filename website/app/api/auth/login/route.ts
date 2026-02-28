@@ -1,7 +1,17 @@
 import { NextResponse } from 'next/server'
 
 export async function POST(request: Request) {
-  const { password } = await request.json()
+  let body: Record<string, unknown>
+  try {
+    body = await request.json() as Record<string, unknown>
+  } catch {
+    return NextResponse.json({ error: 'Invalid request body' }, { status: 400 })
+  }
+
+  const { password } = body
+  if (!password || typeof password !== 'string') {
+    return NextResponse.json({ error: 'Invalid password' }, { status: 401 })
+  }
 
   if (password !== process.env.ADMIN_PASSWORD) {
     return NextResponse.json({ error: 'Invalid password' }, { status: 401 })
