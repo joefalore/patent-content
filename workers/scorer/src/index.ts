@@ -27,9 +27,6 @@ export interface Env {
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001'
 const BATCH_SIZE = 30
 const PATENTSVIEW_RATE_LIMIT = 45 // max requests per 60-second window
-const USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-
 const CPC_DESCRIPTIONS: Record<string, string> = {
   A: 'Human Necessities (food, clothing, personal care, health, amusement)',
   B: 'Performing Operations, Transporting (separating, mixing, shaping, printing, vehicles)',
@@ -68,7 +65,6 @@ interface BatchStats {
   fetched: number
   no_abstract: number
   no_diagrams: number
-  google_blocked: boolean
   scored: number
   approved: number // score >= 8
   errors: number
@@ -80,9 +76,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function randomDelay(minMs: number, maxMs: number): Promise<void> {
-  return sleep(minMs + Math.random() * (maxMs - minMs))
-}
 
 /**
  * Fill {{placeholder}} template variables.
@@ -117,40 +110,55 @@ const patentsViewLimiter = {
   },
 }
 
-// ─── PatentsView — Abstract Fetching ─────────────────────────────────────────
+// ─── PatentsView — Abstract + Diagram Fetching ───────────────────────────────
+//
+// Fetches abstract AND figure count in a single PatentsView call.
+// patent_num_figures is the official USPTO count of drawing figures.
+// Using PatentsView instead of scraping Google Patents — Workers IPs are blocked by Google.
 
-async function fetchAbstract(patentNumber: string, apiKey: string): Promise<string | null> {
+interface PatentViewResult {
+  abstract: string | null
+  hasDiagrams: boolean
+}
+
+async function fetchPatentViewData(patentNumber: string, apiKey: string): Promise<PatentViewResult> {
   await patentsViewLimiter.throttle()
 
   const q = encodeURIComponent(JSON.stringify({ patent_id: patentNumber }))
-  const f = encodeURIComponent(JSON.stringify(['patent_abstract', 'patent_id']))
+  const f = encodeURIComponent(JSON.stringify(['patent_abstract', 'patent_id', 'patent_num_figures']))
   const url = `https://search.patentsview.org/api/v1/patent/?q=${q}&f=${f}`
 
   try {
     const response = await fetch(url, { headers: { 'X-Api-Key': apiKey } })
-    if (!response.ok) return null
+    if (!response.ok) return { abstract: null, hasDiagrams: false }
 
     const data = (await response.json()) as {
-      patents?: Array<{ patent_abstract?: string | null }>
+      patents?: Array<{ patent_abstract?: string | null; patent_num_figures?: number | null }>
       error?: boolean
     }
 
-    if (data.error || !data.patents?.length) return null
-    return data.patents[0].patent_abstract ?? null
+    if (data.error || !data.patents?.length) return { abstract: null, hasDiagrams: false }
+
+    const patent = data.patents[0]
+    const abstract = patent.patent_abstract ?? null
+    // If patent_num_figures is null/undefined, default to true — most utility patents have drawings
+    const hasDiagrams = patent.patent_num_figures == null ? true : patent.patent_num_figures > 0
+
+    return { abstract, hasDiagrams }
   } catch {
-    return null
+    return { abstract: null, hasDiagrams: false }
   }
 }
 
 /**
- * Fetch abstracts for an entire batch in parallel chunks of 10.
- * 700ms pause between chunks to stay well within the rate limit.
+ * Fetch abstracts + diagram flags for an entire batch in parallel chunks of 10.
+ * 700ms pause between chunks to stay within PatentsView rate limit.
  */
-async function fetchAllAbstracts(
+async function fetchAllPatentViewData(
   patents: PatentRow[],
   apiKey: string
-): Promise<Map<string, string | null>> {
-  const results = new Map<string, string | null>()
+): Promise<Map<string, PatentViewResult>> {
+  const results = new Map<string, PatentViewResult>()
   const CHUNK = 10
 
   for (let i = 0; i < patents.length; i += CHUNK) {
@@ -158,17 +166,15 @@ async function fetchAllAbstracts(
 
     const chunkResults = await Promise.all(
       chunk.map((p) =>
-        fetchAbstract(p.patent_number, apiKey).then((abstract) => ({
+        fetchPatentViewData(p.patent_number, apiKey).then((result) => ({
           number: p.patent_number,
-          abstract,
+          result,
         }))
       )
     )
 
-    chunkResults.forEach((r) => results.set(r.number, r.abstract))
+    chunkResults.forEach((r) => results.set(r.number, r.result))
 
-    // Brief pause between chunks — not strictly needed by the rate limiter
-    // but avoids burst patterns that can trigger soft limits
     if (i + CHUNK < patents.length) {
       await sleep(700)
     }
@@ -177,40 +183,6 @@ async function fetchAllAbstracts(
   return results
 }
 
-// ─── Google Patents — Diagram Check ──────────────────────────────────────────
-//
-// Checks whether a patent page has diagrams on Google Patents.
-// Sequential (not parallelized) with 1-3s random delay to avoid bot detection.
-// Circuit breaker: if blocked (403/429), stops checking for the rest of the batch.
-
-async function checkForDiagrams(
-  patentNumber: string,
-  blocked: { value: boolean }
-): Promise<boolean> {
-  if (blocked.value) return false
-
-  // Random delay — respectful crawling, not batched
-  await randomDelay(1_000, 3_000)
-
-  try {
-    // D1 stores patent numbers as digits only — Google Patents requires US prefix
-    const url = `https://patents.google.com/patent/US${patentNumber}`
-    const response = await fetch(url, { headers: { 'User-Agent': USER_AGENT } })
-
-    if (response.status === 429 || response.status === 403) {
-      blocked.value = true
-      console.warn(`Google Patents blocked on ${patentNumber} — diagram checks paused for this batch`)
-      return false
-    }
-
-    if (!response.ok) return false
-
-    const html = await response.text()
-    return html.includes('patentimages.storage.googleapis.com')
-  } catch {
-    return false
-  }
-}
 
 // ─── Claude Haiku — Scoring ───────────────────────────────────────────────────
 
@@ -333,7 +305,6 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
     fetched: 0,
     no_abstract: 0,
     no_diagrams: 0,
-    google_blocked: false,
     scored: 0,
     approved: 0,
     errors: 0,
@@ -384,16 +355,14 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
     return stats
   }
 
-  // 3. Fetch all abstracts from PatentsView in parallel chunks
-  const abstracts = await fetchAllAbstracts(patents, env.PATENTSVIEW_API_KEY)
+  // 3. Fetch abstracts + diagram counts from PatentsView in parallel chunks
+  const patentViewData = await fetchAllPatentViewData(patents, env.PATENTSVIEW_API_KEY)
 
-  // 4. Process each patent sequentially
-  //    Google Patents must be sequential with random delays — never parallel
-  const googleBlocked = { value: false }
-
+  // 4. Process each patent
   for (const patent of patents) {
     try {
-      const abstract = abstracts.get(patent.patent_number) ?? null
+      const pvData = patentViewData.get(patent.patent_number) ?? { abstract: null, hasDiagrams: false }
+      const { abstract, hasDiagrams } = pvData
 
       // No abstract — save as score=0 to prevent future re-processing
       if (!abstract) {
@@ -402,11 +371,7 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
         continue
       }
 
-      // Diagram check — sequential, 1-3s delay, circuit breaker
-      const hasDiagrams = await checkForDiagrams(patent.patent_number, googleBlocked)
-      if (googleBlocked.value) stats.google_blocked = true
-
-      // No diagrams — auto-reject (visual content required), save to prevent re-processing
+      // No diagrams (per PatentsView figure count) — auto-reject, save to prevent re-processing
       if (!hasDiagrams) {
         stats.no_diagrams++
         await saveScore(env.APP_DB, patent.patent_number, 0, abstract, false, null)
