@@ -75,18 +75,25 @@ export async function GET() {
       return NextResponse.json({ ready: [], posted: [] })
     }
 
-    const placeholders = uniqueNumbers.map(() => '?').join(', ')
-
-    const [patentRows, contentRows] = await Promise.all([
-      queryD1<{ patent_number: string; title: string; assignee_name: string | null }>(
-        `SELECT patent_number, title, assignee_name FROM patents WHERE patent_number IN (${placeholders})`,
-        uniqueNumbers
-      ),
-      queryAppD1<{ patent_number: string; url_full: string; caption_twitter: string | null; caption_fbli: string | null }>(
-        `SELECT patent_number, url_full, caption_twitter, caption_fbli FROM content_queue WHERE patent_number IN (${placeholders})`,
-        uniqueNumbers
-      ),
-    ])
+    // Batch into chunks of 99 — D1 enforces a 100 bound-parameter limit per query
+    const patentRows: Array<{ patent_number: string; title: string; assignee_name: string | null }> = []
+    const contentRows: Array<{ patent_number: string; url_full: string; caption_twitter: string | null; caption_fbli: string | null }> = []
+    for (let i = 0; i < uniqueNumbers.length; i += 99) {
+      const chunk = uniqueNumbers.slice(i, i + 99)
+      const placeholders = chunk.map(() => '?').join(', ')
+      const [pChunk, cChunk] = await Promise.all([
+        queryD1<{ patent_number: string; title: string; assignee_name: string | null }>(
+          `SELECT patent_number, title, assignee_name FROM patents WHERE patent_number IN (${placeholders})`,
+          chunk
+        ),
+        queryAppD1<{ patent_number: string; url_full: string; caption_twitter: string | null; caption_fbli: string | null }>(
+          `SELECT patent_number, url_full, caption_twitter, caption_fbli FROM content_queue WHERE patent_number IN (${placeholders})`,
+          chunk
+        ),
+      ])
+      patentRows.push(...pChunk)
+      contentRows.push(...cChunk)
+    }
 
     const patentMap = new Map(patentRows.map(p => [p.patent_number, p]))
     const contentMap = new Map(contentRows.map(c => [c.patent_number, c]))

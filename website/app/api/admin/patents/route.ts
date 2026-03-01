@@ -51,18 +51,28 @@ export async function GET() {
     }
 
     // 2. Fetch patent metadata from patent-tracker-db
+    // Batch into chunks of 99 — D1 enforces a 100 bound-parameter limit per query
     const numbers = scores.map(s => s.patent_number)
-    const placeholders = numbers.map(() => '?').join(', ')
-    const patentRows = await queryD1<{
+    const patentRows: Array<{
       patent_number: string; title: string; assignee_name: string | null
       cpc_section: string | null; calculated_expiration_date: string | null
       filing_date: string | null; grant_date: string | null
-    }>(
-      `SELECT patent_number, title, assignee_name, cpc_section,
-              calculated_expiration_date, filing_date, grant_date
-       FROM patents WHERE patent_number IN (${placeholders})`,
-      numbers
-    )
+    }> = []
+    for (let i = 0; i < numbers.length; i += 99) {
+      const chunk = numbers.slice(i, i + 99)
+      const placeholders = chunk.map(() => '?').join(', ')
+      const rows = await queryD1<{
+        patent_number: string; title: string; assignee_name: string | null
+        cpc_section: string | null; calculated_expiration_date: string | null
+        filing_date: string | null; grant_date: string | null
+      }>(
+        `SELECT patent_number, title, assignee_name, cpc_section,
+                calculated_expiration_date, filing_date, grant_date
+         FROM patents WHERE patent_number IN (${placeholders})`,
+        chunk
+      )
+      patentRows.push(...rows)
+    }
 
     const patentMap = new Map(patentRows.map(p => [p.patent_number, p]))
 
