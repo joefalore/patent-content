@@ -25,7 +25,7 @@ export interface Env {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001'
-const BATCH_SIZE = 30
+const BATCH_SIZE = 20
 const PATENTSVIEW_RATE_LIMIT = 45 // max requests per 60-second window
 const CPC_DESCRIPTIONS: Record<string, string> = {
   A: 'Human Necessities (food, clothing, personal care, health, amusement)',
@@ -131,7 +131,10 @@ async function fetchPatentViewData(patentNumber: string, apiKey: string): Promis
 
   try {
     const response = await fetch(url, { headers: { 'X-Api-Key': apiKey } })
-    if (!response.ok) return { abstract: null, hasDiagrams: false }
+    if (!response.ok) {
+      await response.body?.cancel()
+      return { abstract: null, hasDiagrams: false }
+    }
 
     const data = (await response.json()) as {
       patents?: Array<{
@@ -228,7 +231,8 @@ async function scoreWithHaiku(
     })
 
     if (!response.ok) {
-      console.error(`Haiku API error ${response.status} for patent ${patent.patent_number}`)
+      const errBody = await response.text()
+      console.error(`Haiku API error ${response.status} for patent ${patent.patent_number}: ${errBody}`)
       return null
     }
 
@@ -327,7 +331,7 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
   //    - Oversample from PATENTS_DB (3x batch size) to account for already-scored overlap
   //    - D1 binding hard limit: 100 SQL variables per query — oversample must stay under that
   //    - Can't use a cross-DB subquery, so filter in code after checking APP_DB
-  const OVERSAMPLE = BATCH_SIZE * 3  // 30 * 3 = 90 — safely under D1's 100-variable limit
+  const OVERSAMPLE = BATCH_SIZE * 3  // 20 * 3 = 60 — safely under D1's 100-variable limit
   const { results: candidates } = await env.PATENTS_DB.prepare(
     `SELECT patent_number, title, assignee_name, cpc_section,
             calculated_expiration_date, filing_date, grant_date
