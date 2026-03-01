@@ -55,10 +55,12 @@ interface PatentRow {
 
 interface ScoringResult {
   plain_english: string
-  consumer_relevance: number
+  familiar_subject: number   // saved as consumer_relevance in DB
   relatability: number
   explainability: number
-  visual_appeal: number
+  visual_potential: number   // saved as visual_appeal in DB
+  discovery_factor: number
+  story_hook: number
   score: number
   reasoning: string
 }
@@ -252,7 +254,7 @@ async function scoreWithHaiku(
     // Validate required fields are present and numeric
     // Validate required numeric fields
     const r = result as unknown as Record<string, unknown>
-    const required = ['consumer_relevance', 'relatability', 'explainability', 'visual_appeal', 'score']
+    const required = ['familiar_subject', 'relatability', 'explainability', 'visual_potential', 'discovery_factor', 'story_hook', 'score']
     for (const field of required) {
       if (typeof r[field] !== 'number') {
         console.error(`Haiku response missing field "${field}" for ${patent.patent_number}`)
@@ -290,18 +292,20 @@ async function saveScore(
     .prepare(
       `INSERT INTO patent_scores
         (patent_number, score, consumer_relevance, relatability,
-         explainability, visual_appeal, abstract, plain_english,
-         has_diagrams, reasoning)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         explainability, visual_appeal, discovery_factor, story_hook,
+         abstract, plain_english, has_diagrams, reasoning)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(patent_number) DO NOTHING`
     )
     .bind(
       patentNumber,
       score,
-      result?.consumer_relevance ?? null,
+      result?.familiar_subject ?? null,
       result?.relatability ?? null,
       result?.explainability ?? null,
-      result?.visual_appeal ?? null,
+      result?.visual_potential ?? null,
+      result?.discovery_factor ?? null,
+      result?.story_hook ?? null,
       abstract,
       result?.plain_english ?? null,
       hasDiagrams ? 1 : 0,
