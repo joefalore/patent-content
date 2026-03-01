@@ -1,7 +1,7 @@
 /**
  * Patent Scorer Worker — InventionGenie
  *
- * Triggered by cron-job.org every 30 minutes via POST to the fetch handler.
+ * Triggered by cron-job.org every 3 minutes via POST to the fetch handler.
  * Each run processes BATCH_SIZE unscored expired utility patents:
  *   1. Read cursor from inventiongenie-db settings table (cursor-based pagination
  *      avoids full table scans on patent-tracker-db — was 460M rows/day with RANDOM(),
@@ -27,7 +27,7 @@ export interface Env {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001'
-const BATCH_SIZE = 3
+const BATCH_SIZE = 1
 const PATENTSVIEW_RATE_LIMIT = 45 // max requests per 60-second window
 const CPC_DESCRIPTIONS: Record<string, string> = {
   A: 'Human Necessities (food, clothing, personal care, health, amusement)',
@@ -356,7 +356,7 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
   // 2. Fetch unscored expired utility patents using cursor-based pagination.
   //    OVERSAMPLE = 2x batch so we have buffer for already-scored patents.
   //    Reads only OVERSAMPLE rows via the patent_number PK index (not a full table scan).
-  const OVERSAMPLE = BATCH_SIZE * 2  // 3 * 2 = 6
+  const OVERSAMPLE = BATCH_SIZE * 2  // 1 * 2 = 2
   const cursor = await getScorerCursor(env.APP_DB)
 
   const { results: candidates } = await env.PATENTS_DB.prepare(
@@ -469,9 +469,9 @@ export default {
   },
 
   // Fetch handler — "Run Now" button in admin and cron-job.org POST here
-  // Synchronous: awaits the full batch before responding. With BATCH_SIZE=3 this
-  // takes ~15-20s, well within cron-job.org's 30s timeout. waitUntil() is NOT
-  // used because Cloudflare free plan cancels background tasks almost immediately.
+  // Synchronous: awaits the full batch before responding. With BATCH_SIZE=1 this
+  // takes ~5-9s, well within cron-job.org's timeout. waitUntil() is NOT used
+  // because Cloudflare free plan cancels background tasks almost immediately.
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405 })
