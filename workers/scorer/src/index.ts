@@ -1,15 +1,17 @@
 /**
  * Patent Scorer Worker — InventionGenie
  *
- * Runs on Cloudflare Cron Trigger every 5 minutes.
+ * Triggered by cron-job.org every 30 minutes via POST to the fetch handler.
  * Each run processes BATCH_SIZE unscored expired utility patents:
- *   1. Fetch abstracts from PatentsView (parallel batches, 45 req/min limit)
- *   2. Check Google Patents for diagrams (sequential, 1-3s random delay, circuit breaker)
+ *   1. Read cursor from inventiongenie-db settings table (cursor-based pagination
+ *      avoids full table scans on patent-tracker-db — was 460M rows/day with RANDOM(),
+ *      now ~480 rows/day using the patent_number primary key index)
+ *   2. Fetch abstracts + diagram counts from PatentsView in one call per patent
  *   3. Score with Claude Haiku (structured JSON with plain-English translation)
  *   4. Save ALL processed patents to patent_scores — even rejections (score=0)
  *      so they are excluded from future batches and never re-processed
  *
- * The fetch handler accepts POST from the admin "Run Now" button.
+ * The fetch handler accepts POST from the admin "Run Now" button and cron-job.org.
  */
 
 export interface Env {
@@ -308,6 +310,30 @@ async function saveScore(
     .run()
 }
 
+// ─── Cursor Pagination ────────────────────────────────────────────────────────
+//
+// Stores the last-seen patent_number in inventiongenie-db's settings table.
+// Each run queries: WHERE patent_number > cursor ORDER BY patent_number LIMIT N
+// This uses the patent_number primary key index and reads only N rows per query,
+// replacing ORDER BY RANDOM() which scanned ~320K rows on every invocation.
+// When the cursor reaches the end of the dataset it resets to '' to wrap around.
+
+async function getScorerCursor(db: D1Database): Promise<string> {
+  const row = await db
+    .prepare("SELECT value FROM settings WHERE key = 'scorer_cursor'")
+    .first<{ value: string }>()
+  return row?.value ?? ''
+}
+
+async function updateScorerCursor(db: D1Database, cursor: string): Promise<void> {
+  await db
+    .prepare(
+      "INSERT INTO settings (key, value) VALUES ('scorer_cursor', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    )
+    .bind(cursor)
+    .run()
+}
+
 // ─── Main Scoring Orchestrator ────────────────────────────────────────────────
 
 async function runScoringBatch(env: Env): Promise<BatchStats> {
@@ -327,11 +353,12 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
     return stats
   }
 
-  // 2. Fetch unscored expired utility patents
-  //    - Oversample from PATENTS_DB (3x batch size) to account for already-scored overlap
-  //    - D1 binding hard limit: 100 SQL variables per query — oversample must stay under that
-  //    - Can't use a cross-DB subquery, so filter in code after checking APP_DB
-  const OVERSAMPLE = BATCH_SIZE * 3  // 5 * 3 = 15 — safely under D1's 100-variable limit
+  // 2. Fetch unscored expired utility patents using cursor-based pagination.
+  //    OVERSAMPLE = 2x batch so we have buffer for already-scored patents.
+  //    Reads only OVERSAMPLE rows via the patent_number PK index (not a full table scan).
+  const OVERSAMPLE = BATCH_SIZE * 2  // 5 * 2 = 10
+  const cursor = await getScorerCursor(env.APP_DB)
+
   const { results: candidates } = await env.PATENTS_DB.prepare(
     `SELECT patent_number, title, assignee_name, cpc_section,
             calculated_expiration_date, filing_date, grant_date
@@ -341,11 +368,22 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
        AND title IS NOT NULL
        AND patent_number NOT LIKE 'D%'
        AND patent_number NOT LIKE 'PP%'
-     ORDER BY RANDOM()
+       AND patent_number > ?
+     ORDER BY patent_number ASC
      LIMIT ?`
   )
-    .bind(OVERSAMPLE)
+    .bind(cursor, OVERSAMPLE)
     .all<PatentRow>()
+
+  // End of dataset — reset cursor to wrap around on next run
+  if (candidates.length === 0) {
+    await updateScorerCursor(env.APP_DB, '')
+    console.log('Scorer cursor reset to start of dataset')
+    return stats
+  }
+
+  // Advance cursor to the last fetched patent_number before any filtering
+  await updateScorerCursor(env.APP_DB, candidates[candidates.length - 1].patent_number)
 
   // Filter out already-scored patents by querying APP_DB with the candidate numbers
   let patents: PatentRow[] = candidates
