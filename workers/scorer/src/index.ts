@@ -112,20 +112,21 @@ const patentsViewLimiter = {
 
 // ─── PatentsView — Abstract + Diagram Fetching ───────────────────────────────
 //
-// Fetches abstract AND figure count in a single PatentsView call.
-// patent_num_figures is the official USPTO count of drawing figures.
-// Using PatentsView instead of scraping Google Patents — Workers IPs are blocked by Google.
+// Fetches abstract AND diagram count in a single PatentsView call.
+// `figures` is a NESTED ENTITY in PatentsView API v1 — use dot notation in the
+// fields array (e.g. "figures.num_figures"), NOT a top-level field name.
+// The response returns a `figures` array within each patent object.
 
-interface PatentViewResult {
+interface PatentViewData {
   abstract: string | null
   hasDiagrams: boolean
 }
 
-async function fetchPatentViewData(patentNumber: string, apiKey: string): Promise<PatentViewResult> {
+async function fetchPatentViewData(patentNumber: string, apiKey: string): Promise<PatentViewData> {
   await patentsViewLimiter.throttle()
 
   const q = encodeURIComponent(JSON.stringify({ patent_id: patentNumber }))
-  const f = encodeURIComponent(JSON.stringify(['patent_abstract', 'patent_id', 'patent_num_figures']))
+  const f = encodeURIComponent(JSON.stringify(['patent_abstract', 'patent_id', 'figures.num_figures']))
   const url = `https://search.patentsview.org/api/v1/patent/?q=${q}&f=${f}`
 
   try {
@@ -133,7 +134,10 @@ async function fetchPatentViewData(patentNumber: string, apiKey: string): Promis
     if (!response.ok) return { abstract: null, hasDiagrams: false }
 
     const data = (await response.json()) as {
-      patents?: Array<{ patent_abstract?: string | null; patent_num_figures?: number | null }>
+      patents?: Array<{
+        patent_abstract?: string | null
+        figures?: Array<{ num_figures?: number | null }>
+      }>
       error?: boolean
     }
 
@@ -141,8 +145,10 @@ async function fetchPatentViewData(patentNumber: string, apiKey: string): Promis
 
     const patent = data.patents[0]
     const abstract = patent.patent_abstract ?? null
-    // If patent_num_figures is null/undefined, default to true — most utility patents have drawings
-    const hasDiagrams = patent.patent_num_figures == null ? true : patent.patent_num_figures > 0
+    const numFigures = patent.figures?.[0]?.num_figures
+    // If field is missing/null (shouldn't happen, but be safe), default true:
+    // better to score a diagram-less patent than to wrongly reject one that has diagrams
+    const hasDiagrams = numFigures == null ? true : numFigures > 0
 
     return { abstract, hasDiagrams }
   } catch {
@@ -151,14 +157,14 @@ async function fetchPatentViewData(patentNumber: string, apiKey: string): Promis
 }
 
 /**
- * Fetch abstracts + diagram flags for an entire batch in parallel chunks of 10.
+ * Fetch abstract + diagram flag for an entire batch in parallel chunks of 10.
  * 700ms pause between chunks to stay within PatentsView rate limit.
  */
 async function fetchAllPatentViewData(
   patents: PatentRow[],
   apiKey: string
-): Promise<Map<string, PatentViewResult>> {
-  const results = new Map<string, PatentViewResult>()
+): Promise<Map<string, PatentViewData>> {
+  const results = new Map<string, PatentViewData>()
   const CHUNK = 10
 
   for (let i = 0; i < patents.length; i += CHUNK) {
@@ -166,14 +172,14 @@ async function fetchAllPatentViewData(
 
     const chunkResults = await Promise.all(
       chunk.map((p) =>
-        fetchPatentViewData(p.patent_number, apiKey).then((result) => ({
+        fetchPatentViewData(p.patent_number, apiKey).then((data) => ({
           number: p.patent_number,
-          result,
+          data,
         }))
       )
     )
 
-    chunkResults.forEach((r) => results.set(r.number, r.result))
+    chunkResults.forEach((r) => results.set(r.number, r.data))
 
     if (i + CHUNK < patents.length) {
       await sleep(700)
@@ -355,7 +361,7 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
     return stats
   }
 
-  // 3. Fetch abstracts + diagram counts from PatentsView in parallel chunks
+  // 3. Fetch abstracts + diagram flags from PatentsView in parallel chunks
   const patentViewData = await fetchAllPatentViewData(patents, env.PATENTSVIEW_API_KEY)
 
   // 4. Process each patent
@@ -371,7 +377,7 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
         continue
       }
 
-      // No diagrams (per PatentsView figure count) — auto-reject, save to prevent re-processing
+      // No diagrams per PatentsView figures.num_figures — auto-reject and save to prevent re-processing
       if (!hasDiagrams) {
         stats.no_diagrams++
         await saveScore(env.APP_DB, patent.patent_number, 0, abstract, false, null)
