@@ -27,7 +27,7 @@ export interface Env {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const HAIKU_MODEL = 'claude-haiku-4-5-20251001'
-const BATCH_SIZE = 5
+const BATCH_SIZE = 3
 const PATENTSVIEW_RATE_LIMIT = 45 // max requests per 60-second window
 const CPC_DESCRIPTIONS: Record<string, string> = {
   A: 'Human Necessities (food, clothing, personal care, health, amusement)',
@@ -356,7 +356,7 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
   // 2. Fetch unscored expired utility patents using cursor-based pagination.
   //    OVERSAMPLE = 2x batch so we have buffer for already-scored patents.
   //    Reads only OVERSAMPLE rows via the patent_number PK index (not a full table scan).
-  const OVERSAMPLE = BATCH_SIZE * 2  // 5 * 2 = 10
+  const OVERSAMPLE = BATCH_SIZE * 2  // 3 * 2 = 6
   const cursor = await getScorerCursor(env.APP_DB)
 
   const { results: candidates } = await env.PATENTS_DB.prepare(
