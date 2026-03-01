@@ -430,24 +430,20 @@ export default {
     ctx.waitUntil(runScoringBatch(env))
   },
 
-  // Fetch handler — "Run Now" button in admin POSTs here
-  async fetch(request: Request, env: Env): Promise<Response> {
+  // Fetch handler — "Run Now" button in admin and cron-job.org POST here
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405 })
     }
 
-    // Verify request comes from our admin (shared secret)
+    // Verify request comes from our admin or cron-job.org (shared secret)
     const authHeader = request.headers.get('x-worker-secret')
     if (!authHeader || authHeader !== env.WORKER_AUTH_SECRET) {
       return new Response('Unauthorized', { status: 401 })
     }
 
-    try {
-      const stats = await runScoringBatch(env)
-      return Response.json({ success: true, stats })
-    } catch (err) {
-      console.error('Scoring batch failed:', err)
-      return Response.json({ success: false, error: (err as Error).message }, { status: 500 })
-    }
+    // Return immediately so cron-job.org doesn't time out — batch runs in background
+    ctx.waitUntil(runScoringBatch(env).catch(err => console.error('Scoring batch failed:', err)))
+    return Response.json({ success: true, message: 'Batch started' }, { status: 202 })
   },
 }
