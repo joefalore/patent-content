@@ -469,19 +469,25 @@ export default {
   },
 
   // Fetch handler — "Run Now" button in admin and cron-job.org POST here
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  // Synchronous: awaits the full batch before responding. With BATCH_SIZE=3 this
+  // takes ~15-20s, well within cron-job.org's 30s timeout. waitUntil() is NOT
+  // used because Cloudflare free plan cancels background tasks almost immediately.
+  async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405 })
     }
 
-    // Verify request comes from our admin or cron-job.org (shared secret)
     const authHeader = request.headers.get('x-worker-secret')
     if (!authHeader || authHeader !== env.WORKER_AUTH_SECRET) {
       return new Response('Unauthorized', { status: 401 })
     }
 
-    // Return immediately so cron-job.org doesn't time out — batch runs in background
-    ctx.waitUntil(runScoringBatch(env).catch(err => console.error('Scoring batch failed:', err)))
-    return Response.json({ success: true, message: 'Batch started' }, { status: 202 })
+    try {
+      const stats = await runScoringBatch(env)
+      return Response.json({ success: true, stats })
+    } catch (err) {
+      console.error('Scoring batch failed:', err)
+      return Response.json({ success: false, error: (err as Error).message }, { status: 500 })
+    }
   },
 }
