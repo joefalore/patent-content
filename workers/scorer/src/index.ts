@@ -340,6 +340,7 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
        AND enriched = 1
        AND title IS NOT NULL
        AND patent_number NOT LIKE 'D%'
+       AND patent_number NOT LIKE 'PP%'
      ORDER BY RANDOM()
      LIMIT ?`
   )
