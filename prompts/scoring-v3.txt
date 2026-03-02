@@ -79,6 +79,9 @@ AUTO-REJECT if ANY apply:
 - Semiconductor or chip manufacturing processes
 - Enterprise software or B2B business methods
 
+NULL ABSTRACT: If abstract is missing or fewer than 20 words, set all
+criteria to 2 and score to 2. Do not guess or fill in from the title alone.
+
 EXAMPLES:
 
 Score 8-10 (publish):
@@ -111,4 +114,12 @@ Respond ONLY with valid JSON:
   "reasoning": "One or two sentences on why this does or does not have scroll-stopping potential"
 }
 
-OVERALL SCORE = average of all 6 criteria, rounded to nearest integer.
+OVERALL SCORE = round((familiar_subject + relatability + explainability +
+visual_potential + discovery_factor + story_hook) / 6). The score field
+in your JSON MUST equal this calculated value exactly.
+
+CALIBRATION: Be strict. Most patents are functional but forgettable and
+should score 5 or below. If you score more than 1 in 10 patents at 8+,
+you are being too generous. A 7 means interesting but no real hook. An 8
+requires consumer familiarity AND a clear story angle AND visual potential.
+Only genuine scroll-stoppers reach 8.
