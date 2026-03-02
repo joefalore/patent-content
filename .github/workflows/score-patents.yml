@@ -1,10 +1,7 @@
 name: Score Patents
 
 on:
-  schedule:
-    # Every 5 minutes — calls the scorer worker HTTP endpoint
-    - cron: '*/5 * * * *'
-  workflow_dispatch: # Allow manual trigger from GitHub UI
+  workflow_dispatch: # Manual trigger only — cron-job.org handles scheduling
 
 jobs:
   score:
