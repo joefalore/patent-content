@@ -7,8 +7,8 @@ Patent to score:
 - Title: {{title}}
 - Assignee: {{assignee_name}}
 - Abstract: {{abstract}}
-- CPC Section: {{cpc_section}} ({{cpc_description}})
-- Has Diagrams: {{has_diagrams}}
+- CPC: {{cpc_section}} — {{cpc_subclass_title}} / {{cpc_group_title}}
+- Figures: {{num_figures}}
 
 STEP 1 — TRANSLATE FIRST:
 One or two plain sentences a non-expert would understand. Stay strictly
@@ -74,7 +74,6 @@ Types of strong hooks:
 1-3: Just a product, no angle
 
 AUTO-REJECT if ANY apply:
-- No diagrams available
 - Pharmaceutical compounds or chemical formulas
 - Pure software algorithms or mathematical methods
 - Semiconductor or chip manufacturing processes
