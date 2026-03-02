@@ -1,0 +1,115 @@
+You are scoring expired patents for viral social media potential.
+Target: the top 1% that make someone stop scrolling and think
+"wait, there's a patent for THAT?"
+
+Patent to score:
+- Number: {{patent_number}}
+- Title: {{title}}
+- Assignee: {{assignee_name}}
+- Abstract: {{abstract}}
+- CPC Section: {{cpc_section}} ({{cpc_description}})
+- Has Diagrams: {{has_diagrams}}
+
+STEP 1 — TRANSLATE FIRST:
+One or two plain sentences a non-expert would understand. Stay strictly
+accurate to the abstract — do not fill gaps, guess at intent, or add
+context not in the patent. Connect the dots to make it simple and
+relatable, but never change or embellish what the patent actually describes.
+Good: "This is the DRM system inside Keurig machines that detects
+unauthorized pods and refuses to brew." (accurate + plain)
+Bad: "This revolutionized how people make coffee." (invented framing)
+
+STEP 2 — SCORE on your plain-English translation, not the abstract.
+
+CRITERIA (score 1-10 each):
+
+1. FAMILIAR SUBJECT
+Is the subject matter something most people recognize, even if they
+would never buy or use it? Cable cars, tattoos, coffee machines = yes.
+Semiconductor etching, PLC controllers = no.
+9-10: Everyone knows what this thing is
+1-3: Niche industry or specialized equipment most people never encounter
+
+2. RELATABILITY
+Does it connect to human experience — daily life, curiosity, emotion,
+culture? Not "would they buy it" but "does it touch something they
+understand or feel?"
+9-10: Solves a familiar problem, involves something personal or cultural
+1-3: Industrial process with no human connection
+
+3. EXPLAINABILITY
+One or two sentences, no jargon, a 12-year-old gets it?
+9-10: Clear physical product or obvious mechanism
+1-3: Requires background knowledge to even parse the concept
+
+4. VISUAL STORYTELLING
+Could you make a compelling image or short video about this? Consider
+patent diagrams, real-world photos you could source online, or imagery
+AI could generate. Score high only if the visual would also be
+interesting — not just easy to find.
+A 3D printer building an object layer by layer, a Roomba navigating
+a room — the visual alone tells the story.
+A shoe is easy to photograph but not interesting.
+9-10: Iconic object, striking mechanism, instantly recognizable visual
+1-3: Visually boring even if easy to source
+
+5. DISCOVERY FACTOR
+How strong is the "I had no idea this existed or worked this way"
+moment? Things people use daily without knowing the patent behind
+them score high. Obvious solutions to obvious problems score low.
+9-10: Changes how you see something familiar ("you already use this")
+1-3: Expected solution, anyone would have guessed it
+
+6. STORY/HOOK
+Does this patent have a compelling angle beyond "here is an invention"?
+Types of strong hooks:
+- Revelation: "You use this every day and never knew"
+- Villain: corporate or greed angle (Keurig stops working on purpose)
+- Imagine if: technology that could change something personal (removable tattoos)
+- Origin story: this is where a revolution started (3D printing, Roomba)
+- Funny/absurd: toilet splash pad, surprisingly elaborate greeting card mechanism
+- Mechanical elegance: beautiful engineering behind something ordinary
+- Unexpected existence: you would never guess this needed a patent
+9-10: Clear compelling narrative a caption can be built around
+1-3: Just a product, no angle
+
+AUTO-REJECT if ANY apply:
+- No diagrams available
+- Pharmaceutical compounds or chemical formulas
+- Pure software algorithms or mathematical methods
+- Semiconductor or chip manufacturing processes
+- Enterprise software or B2B business methods
+
+EXAMPLES:
+
+Score 8-10 (publish):
+- Keurig pod DRM: villain story — designed to detect and reject unauthorized pods
+- 3D printing origin patent: origin story + discovery + strong visual
+- Removable laser tattoo ink: imagine if + personal + surprising
+- Roomba auto-dock: revelation + everyone knows Roomba
+- Toilet splash-reducing pad: funny + relatable + why not always
+- Vaporizer that collects vapor in a balloon bag: surprising mechanism of a familiar device
+- Inclined cable car station: mechanical elegance + everyone knows cable cars
+- Pop-up greeting card mechanism: surprisingly complex for something mundane
+- Ignition module for explosive detonator: unexpected existence + industrial danger + fascinating that this is patented
+- Apple free-fall detection for hard drives: revelation hook — your laptop already does this and you never knew, famous brand adds wow
+
+Score 4-6 (reject):
+- Ankle support shoe strap: functional, no story, expected solution
+- Spiral shoe lacing pattern: clever but no hook, low visual interest
+- Auto flash brightness for faces: feature everyone has, no discovery moment
+
+Respond ONLY with valid JSON:
+{
+  "plain_english": "One or two sentences anyone would understand",
+  "familiar_subject": 8,
+  "relatability": 7,
+  "explainability": 9,
+  "visual_potential": 8,
+  "discovery_factor": 8,
+  "story_hook": 9,
+  "score": 8,
+  "reasoning": "One or two sentences on why this does or does not have scroll-stopping potential"
+}
+
+OVERALL SCORE = average of all 6 criteria, rounded to nearest integer.

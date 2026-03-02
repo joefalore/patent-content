@@ -1,0 +1,83 @@
+You are scoring expired patents for viral social media potential.
+
+CRITICAL: We need the top 0.3% only - S-tier gems that people will stop scrolling for.
+
+Patent to score:
+- Number: {{patent_number}}
+- Title: {{title}}
+- Assignee: {{assignee_name}}
+- Abstract: {{abstract}}
+- CPC Section: {{cpc_section}} ({{cpc_description}})
+- Has Diagrams: {{has_diagrams}}
+
+STEP 1 — TRANSLATE FIRST:
+Before scoring, restate what this patent is in one plain sentence a regular person would understand. Strip all jargon. Focus on what it does for a human, not how it works technically. Example: "This is the dual-tank flushing mechanism that lets modern toilets control water flow to the rim and jet independently."
+
+STEP 2 — SCORE based on your plain-English translation, not the raw abstract.
+
+ASSIGNEE CONTEXT: The assignee (company or inventor) signals consumer relevance. Keurig, Nike, Apple, Sony, iRobot, Procter & Gamble = consumer brand (boosts relevance). IBM Research, Micron, Sumitomo Electric = enterprise/semiconductor (lowers relevance). Unknown/null = neutral, let title and abstract decide.
+
+SCORING CRITERIA (score 1-10 for each):
+
+1. CONSUMER RELEVANCE
+   - Do regular people understand and care about this?
+   - Is it a product/technology people use daily?
+   - Would non-experts find this interesting?
+   - Score 9-10: iPhone features, household products, familiar tech
+   - Score 1-3: Industrial processes, abstract algorithms, B2B tech
+
+2. RELATABILITY
+   - Does this touch everyday life?
+   - Would people say "oh I use that\!" or "I've wondered about that\!"
+   - Is it a common problem or familiar experience?
+   - Score 9-10: Coffee makers, ergonomic tools, common household items
+   - Score 1-3: Specialized equipment, niche industries, enterprise software
+
+3. EXPLAINABILITY
+   - Can you explain it in one simple sentence without jargon?
+   - Would a 12-year-old understand what it does?
+   - Is it visually obvious from diagrams?
+   - Score 9-10: Physical products with clear purpose
+   - Score 1-3: Complex systems, chemical formulas, abstract methods
+
+4. VISUAL APPEAL
+   - Are the diagrams interesting or recognizable?
+   - Can people immediately see what it is?
+   - Is it shareable as an image?
+   - Score 9-10: Clear product diagrams, recognizable objects
+   - Score 1-3: Flowcharts, circuit diagrams, text-heavy
+
+AUTO-REJECT if ANY of these:
+- No diagrams available (visual content required)
+- Pharmaceutical compounds or chemical formulas
+- Abstract algorithms or mathematical methods
+- Semiconductor manufacturing processes
+- Enterprise software or business methods
+- Requires specialized knowledge to understand
+
+EXAMPLES OF 8-10 SCORES (what we want):
+- Score 10: iPhone swipe-to-unlock gesture (iconic, everyone knows it)
+- Score 9: Keurig coffee pod design (daily use, recognizable brand)
+- Score 9: Roomba navigation system (household tech, visual)
+- Score 8: Baby stroller folding mechanism (parents relate, clear diagrams)
+- Score 8: Ergonomic mouse design (solves common problem)
+
+EXAMPLES OF 4-7 SCORES (reject these):
+- Score 7: Generic USB connector shape (too boring)
+- Score 6: Basic hinge mechanism (not interesting enough)
+- Score 5: Network routing protocol (too technical)
+- Score 4: Database indexing method (not consumer-facing)
+
+Respond ONLY with JSON (no markdown, no explanation):
+{
+  "plain_english": "One sentence anyone would understand",
+  "consumer_relevance": 8,
+  "relatability": 9,
+  "explainability": 8,
+  "visual_appeal": 9,
+  "score": 9,
+  "reasoning": "Brief explanation of why this is S-tier (or why it is not)"
+}
+
+OVERALL SCORE = average of all 4 criteria, rounded to nearest integer.
+Only include this patent if SCORE >= 8.
