@@ -45,12 +45,14 @@ const CPC_DESCRIPTIONS: Record<string, string> = {
 
 interface PatentRow {
   patent_number: string
-  title: string
+  title: string | null
   assignee_name: string | null
   cpc_section: string | null
   calculated_expiration_date: string | null
   filing_date: string | null
   grant_date: string | null
+  status: string | null
+  enriched: number | null
 }
 
 interface ScoringResult {
@@ -229,7 +231,7 @@ async function scoreWithHaiku(
       },
       body: JSON.stringify({
         model: HAIKU_MODEL,
-        max_tokens: 512,
+        max_tokens: 400,
         messages: [{ role: 'user', content: prompt }],
       }),
     })
@@ -357,49 +359,57 @@ async function runScoringBatch(env: Env): Promise<BatchStats> {
     return stats
   }
 
-  // 2. Fetch unscored expired utility patents using cursor-based pagination.
-  //    OVERSAMPLE = 2x batch so we have buffer for already-scored patents.
-  //    Reads only OVERSAMPLE rows via the patent_number PK index (not a full table scan).
-  const OVERSAMPLE = BATCH_SIZE * 2  // 1 * 2 = 2
+  // 2. Fetch patents using cursor-based pagination.
+  //    Query uses ONLY the patent_number primary key index — no non-indexed
+  //    columns in the WHERE clause. This prevents SQLite from doing a full
+  //    6.5M-row table scan when status/enriched aren't indexed.
+  //    All other filtering (Expired, enriched, title, D%/PP%) is done in code.
+  const FETCH_WINDOW = 20  // rows to read per run via PK index
   const cursor = await getScorerCursor(env.APP_DB)
 
-  const { results: candidates } = await env.PATENTS_DB.prepare(
+  const { results: fetched } = await env.PATENTS_DB.prepare(
     `SELECT patent_number, title, assignee_name, cpc_section,
-            calculated_expiration_date, filing_date, grant_date
+            calculated_expiration_date, filing_date, grant_date,
+            status, enriched
      FROM patents
-     WHERE status = 'Expired'
-       AND enriched = 1
-       AND title IS NOT NULL
-       AND patent_number NOT LIKE 'D%'
-       AND patent_number NOT LIKE 'PP%'
-       AND patent_number > ?
+     WHERE patent_number > ?
      ORDER BY patent_number ASC
      LIMIT ?`
   )
-    .bind(cursor, OVERSAMPLE)
+    .bind(cursor, FETCH_WINDOW)
     .all<PatentRow>()
 
   // End of dataset — reset cursor to wrap around on next run
-  if (candidates.length === 0) {
+  if (fetched.length === 0) {
     await updateScorerCursor(env.APP_DB, '')
     console.log('Scorer cursor reset to start of dataset')
     return stats
   }
 
-  // Advance cursor to the last fetched patent_number before any filtering
-  await updateScorerCursor(env.APP_DB, candidates[candidates.length - 1].patent_number)
+  // Advance cursor past all fetched rows regardless of filtering
+  await updateScorerCursor(env.APP_DB, fetched[fetched.length - 1].patent_number)
 
-  // Filter out already-scored patents by querying APP_DB with the candidate numbers
-  let patents: PatentRow[] = candidates
-  if (candidates.length > 0) {
-    const candidateNumbers = candidates.map(c => c.patent_number)
-    const placeholders = candidateNumbers.map(() => '?').join(', ')
-    const { results: scoredRows } = await env.APP_DB.prepare(
-      `SELECT patent_number FROM patent_scores WHERE patent_number IN (${placeholders})`
-    ).bind(...candidateNumbers).all<{ patent_number: string }>()
-    const scoredSet = new Set(scoredRows.map(r => r.patent_number))
-    patents = candidates.filter(c => !scoredSet.has(c.patent_number)).slice(0, BATCH_SIZE)
+  // Filter in code: expired utility patents with title only
+  const eligible = fetched.filter(p =>
+    p.status === 'Expired' &&
+    p.enriched === 1 &&
+    p.title != null &&
+    !p.patent_number.startsWith('D') &&
+    !p.patent_number.startsWith('PP')
+  )
+
+  if (eligible.length === 0) {
+    return stats  // no eligible patents in this window, cursor advanced
   }
+
+  // Filter out already-scored patents
+  const eligibleNumbers = eligible.map(c => c.patent_number)
+  const placeholders = eligibleNumbers.map(() => '?').join(', ')
+  const { results: scoredRows } = await env.APP_DB.prepare(
+    `SELECT patent_number FROM patent_scores WHERE patent_number IN (${placeholders})`
+  ).bind(...eligibleNumbers).all<{ patent_number: string }>()
+  const scoredSet = new Set(scoredRows.map(r => r.patent_number))
+  const patents = eligible.filter(c => !scoredSet.has(c.patent_number)).slice(0, BATCH_SIZE)
 
   stats.fetched = patents.length
 
